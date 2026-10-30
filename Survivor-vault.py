@@ -137,7 +137,7 @@ acoustic_frequency = st.sidebar.selectbox(
     ["432 Hz - Cosmic Baseline Calibration", "528 Hz - Core Matrix Transformation", "741 Hz - Intuitive Signal Expansion"]
 )
 
-acoustic_resonance_multiplier = 1.618 if "528" in acoustic_frequency else 1.333 if "741" in acoustic_tuning else 1.0
+acoustic_resonance_multiplier = 1.618 if "528" in acoustic_frequency else 1.333 if "741" in acoustic_frequency else 1.0
 
 if mode == "Alpha Cluster Nodes (Regional Mesh)":
     cluster_name = "Alpha Local Mesh Backbone"
