@@ -6,22 +6,19 @@ import datetime
 import hashlib
 import json
 import os
+import threading
+import time
 from Crypto.Hash import SHA256
 from Crypto.Cipher import AES
 from argon2 import PasswordHasher
+from fastapi import FastAPI, BackgroundTasks
+import uvicorn
 
-# --- PAGE CONFIGURATION ---
-st.set_page_config(
-    page_title="Autonomous Survivor Mesh Node",
-    page_icon="🛡️",
-    layout="wide"
-)
+# --- FASTAPI P2P NODE CORE ---
+node_app = FastAPI()
 
-st.title("🛡️ Project Unified Field: Verified Zero-Knowledge Node & CRDT Mesh Engine")
-st.markdown("Hardened with Argon2id matching vectors, append-only disk persistence, and cryptographic self-purge mechanics.")
-
-# --- DISK-BASED LOCAL DIRECTORY DATA STORAGE ENGINE ---
 DB_FILE = "mesh_ledger.json"
+PEERS_FILE = "peers_registry.json"
 
 def load_persistent_ledger():
     if not os.path.exists(DB_FILE):
@@ -36,34 +33,87 @@ def save_persistent_ledger(ledger_state):
     with open(DB_FILE, "w") as f:
         json.dump(ledger_state, f, indent=4)
 
-# Initialize local node database state
-if "p2p_ledger_state" not in st.session_state:
-    st.session_state.p2p_ledger_state = load_persistent_ledger()
+def load_peers():
+    if not os.path.exists(PEERS_FILE):
+        return ["http://127.0.0.1:8002"] # Sample fallback local peer port
+    try:
+        with open(PEERS_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def save_peers(peers_list):
+    with open(PEERS_FILE, "w") as f:
+        json.dump(peers_list, f, indent=4)
+
+# FastAPI Incoming Sync Webhook Receiver
+@node_app.post("/sync")
+def handle_incoming_block_sync(block: dict, background_tasks: BackgroundTasks):
+    current_ledger = load_persistent_ledger()
+    
+    # Run the immutable block synchronization code
+    if not block.get("IPFS_CID", "").startswith("Qm"):
+        return {"status": "rejected", "reason": "invalid_cid_format"}
+        
+    exists = any(b["IPFS_CID"] == block["IPFS_CID"] for b in current_ledger)
+    if not exists:
+        current_ledger.append(block)
+        current_ledger.sort(key=lambda x: x["CRDT_CLOCK_SEQUENCE"], reverse=True)
+        save_persistent_ledger(current_ledger)
+        return {"status": "merged", "cid": block["IPFS_CID"]}
+        
+    return {"status": "duplicate", "cid": block["IPFS_CID"]}
+
+# Outbound Network Gossip Loop
+def broadcast_block_to_mesh(block: dict):
+    registered_peers = load_peers()
+    for peer in registered_peers:
+        try:
+            requests.post(f"{peer.strip('/')}/sync", json=block, timeout=3)
+        except Exception:
+            pass # Node offline or skipping unreachable mesh routes safely
+
+# Background Thread Launcher for FastAPI
+def run_fastapi_server(port: int):
+    uvicorn.run(node_app, host="0.0.0.0", port=port, log_level="warning")
+
+# --- INITIALIZE CORE NODE BACKEND STATES ---
+if "node_started" not in st.session_state:
+    # Set the unique port for this hardware machine instance (e.g. 8001)
+    st.session_state.node_port = 8001
+    t = threading.Thread(target=run_fastapi_server, args=(st.session_state.node_port,), daemon=True)
+    t.start()
+    st.session_state.node_started = True
+
+# Sync local memory buffers with persistent file outputs
+st.session_state.p2p_ledger_state = load_persistent_ledger()
+
+# --- PAGE CONFIGURATION ---
+st.set_page_config(
+    page_title="Autonomous Survivor Mesh Node",
+    page_icon="🛡️",
+    layout="wide"
+)
+
+st.title("🛡️ Project Unified Field: Verified Zero-Knowledge Node & CRDT Mesh Engine")
+st.markdown(f"Running Active Hardware Socket Node on Port: `{st.session_state.node_port}` | Mesh Operations Persistent")
 
 # --- DECENTRALIZED LEDGER ENGINE (Hardened Production Grade) ---
 class DecentralizedLedgerEngine:
     @staticmethod
     def construct_crdt_op_log(proof_pi: str, coordinates: list, secret_key: bytes, user_key_raw: str) -> dict:
-        """
-        Encapsulates zero-knowledge signatures inside an AES-256-GCM authenticated block,
-        formatting it as an immutable append-only CRDT log payload for peer-to-peer routing.
-        """
         purge_verification_hash = hashlib.sha256(f"{user_key_raw}_PURGE_AUTHORIZATION".encode()).hexdigest()
-
         block_metadata = {
             "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
             "zkp_proof_signature": proof_pi,
             "geo_vector_anchor": coordinates,
             "system_status": "VERIFIED_VACUUM_POLARIZATION_NODE"
         }
-        
         serialized_payload = json.dumps(block_metadata, sort_keys=True).encode('utf-8')
         
-        # Initialize production-grade AES-GCM Cipher
         cipher = AES.new(secret_key, AES.MODE_GCM)
         ciphertext, tag = cipher.encrypt_and_digest(serialized_payload)
         
-        # Compute the Merkle-DAG content identifier hash (Simulated IPFS CID)
         hash_engine = SHA256.new()
         hash_engine.update(ciphertext + cipher.nonce + tag)
         merkle_cid = "Qm" + hash_engine.hexdigest()[:44]
@@ -79,34 +129,11 @@ class DecentralizedLedgerEngine:
         }
 
     @staticmethod
-    def simulate_p2p_gossip_sync(incoming_block: dict, current_peer_state: list) -> list:
-        """
-        Merges incoming Merkle-CRDT operation logs to achieve node persistence consistency.
-        """
-        if not incoming_block["IPFS_CID"].startswith("Qm"):
-            return current_peer_state
-            
-        for established_block in current_peer_state:
-            if established_block["IPFS_CID"] == incoming_block["IPFS_CID"]:
-                return current_peer_state
-                
-        current_peer_state.append(incoming_block)
-        current_peer_state.sort(key=lambda x: x["CRDT_CLOCK_SEQUENCE"], reverse=True)
-        return current_peer_state
-
-    @staticmethod
     def purge_block_by_key(user_key_raw: str, current_peer_state: list) -> tuple:
-        """
-        Walks the CRDT ledger array, identifies blocks belonging to the matching key vector,
-        and completely removes them from the node database.
-        """
         target_purge_hash = hashlib.sha256(f"{user_key_raw}_PURGE_AUTHORIZATION".encode()).hexdigest()
         initial_count = len(current_peer_state)
-        
         cleaned_peer_state = [block for block in current_peer_state if block.get("purge_verification_hash") != target_purge_hash]
-        final_count = len(cleaned_peer_state)
-        
-        blocks_removed = initial_count - final_count
+        blocks_removed = initial_count - len(cleaned_peer_state)
         return cleaned_peer_state, blocks_removed
 
 # --- LIVE METRIC FETCH ENGINES ---
@@ -237,6 +264,22 @@ with col1:
     
     st.dataframe(df_results[["Independent Node", "Resonance Output", "Quantum Mesh Stability", "Node Operational State"]], use_container_width=True)
 
+    # --- P2P NETWORK REGISTRY INTERFACE ---
+    st.markdown("---")
+    st.subheader("🌐 Live Peer Topology Registry")
+    st.markdown("Add the network address (IP & Port) of other hardware nodes running this code to link them into the live synchronization mesh.")
+    
+    current_peers = load_peers()
+    st.write("**Active Mesh Connections:**", current_peers)
+    
+    new_peer = st.text_input("Enter Peer Address to Bind (e.g., http://192.168.1.50:8001):")
+    if st.button("➕ Register Peer to Mesh Topology"):
+        if new_peer and new_peer not in current_peers:
+            current_peers.append(new_peer)
+            save_peers(current_peers)
+            st.success("✅ New target peer path successfully registered to routing tables.")
+            st.rerun()
+
     # --- INDEPENDENT LEDGER PURGE CONTROL ELEMENT BLOCK ---
     st.markdown("---")
     st.subheader("💥 Cryptographic Self-Purge Panel")
@@ -257,7 +300,7 @@ with col1:
                 st.warning("🔍 No active data blocks matched the provided signature key vector sequence inside this local database ledger.")
 
 # ==============================================================================
-# SEPARATION: ENTRY BLOCK SPLIT
+# SEPARATION: ENTRY SECTION
 # ==============================================================================
 with col2:
     st.subheader("🔑 Secure CRDT Vault Drop Interface")
@@ -277,7 +320,7 @@ with col2:
         elif len(user_key) < 16:
             st.error("❌ Key Matrix must be at least 16 characters long to safely seed the AES-256 structural engine.")
         else:
-            with st.spinner("Processing memory-hard Argon2id calculation..."):
+            with st.spinner("Processing memory-hard Argon2id calculation and network gossip..."):
                 derived_aes_seed = hashlib.sha256(user_key.encode()).digest()
                 
                 system_salt = hashlib.sha256(f"Unified_Field_Salt_{acoustic_resonance_multiplier}".encode()).digest()[:16]
@@ -286,6 +329,7 @@ with col2:
                 
                 blinded_token = hashlib.sha256(raw_argon_hash.encode()).hexdigest()
                 
+                # Construct our block metadata mapping
                 crdt_packet = DecentralizedLedgerEngine.construct_crdt_op_log(
                     proof_pi=blinded_token,
                     coordinates=active_coords,
@@ -293,15 +337,19 @@ with col2:
                     user_key_raw=user_key
                 )
                 
-                updated_ledger = DecentralizedLedgerEngine.simulate_p2p_gossip_sync(
-                    incoming_block=crdt_packet,
-                    current_peer_state=st.session_state.p2p_ledger_state
-                )
+                # Update local file engine storage ledger logs
+                local_ledger = load_persistent_ledger()
+                exists = any(b["IPFS_CID"] == crdt_packet["IPFS_CID"] for b in local_ledger)
+                if not exists:
+                    local_ledger.append(crdt_packet)
+                    local_ledger.sort(key=lambda x: x["CRDT_CLOCK_SEQUENCE"], reverse=True)
+                    save_persistent_ledger(local_ledger)
+                    st.session_state.p2p_ledger_state = local_ledger
                 
-                st.session_state.p2p_ledger_state = updated_ledger
-                save_persistent_ledger(updated_ledger)
+                # FIRES THE NETWORK WIRE: Gossip out to all listed mesh coordinates in parallel thread
+                threading.Thread(target=broadcast_block_to_mesh, args=(crdt_packet,), daemon=True).start()
                 
-                st.success("✅ Secure Block Generation Completed! Payload committed straight to persistent JSON disk database.")
+                st.success("✅ Secure Block Generation Completed! Payload committed locally and gossiped to mesh network.")
                 st.json(crdt_packet)
 
 # --- BLIND CROSS-CHECK MATCH ENGINE READOUT ---
@@ -328,7 +376,7 @@ else:
         if len(peers) > 1:
             matches_discovered = True
             st.error(f"🚨 **CRITICAL NETWORK MATCH ALERT:** Found {len(peers)} independent zero-knowledge entries sharing an identical Perpetrator Fingerprint token!")
-            match_data = [{"IPFS Block CID": p[0], "Registration Timestamp": p[1]} for p in peers]
+            match_data = [{"IPFS Block CID": p, "Registration Timestamp": p} for p in peers]
             st.table(pd.DataFrame(match_data))
             st.info("💡 *Note to Operator:* The database cannot read the name or the text details, but we mathematically prove that multiple separate survivors have flagged the exact same identifier.")
             
