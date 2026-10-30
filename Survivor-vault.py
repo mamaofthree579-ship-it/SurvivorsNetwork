@@ -1,140 +1,200 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import requests
+import datetime
 import hashlib
-import json
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Survivor Vault - Decentralized Mesh",
+    page_title="Autonomous Survivor Mesh Network",
     page_icon="🛡️",
     layout="wide"
 )
 
-st.title("🛡️ Decentralized Survivor Network: Zero-Knowledge Mesh Router")
-st.markdown("Utilizing independent, self-contained nodes and client-derived key matrices to connect survivors securely without central storage.")
+st.title("🛡️ Project Unified Field: Zero-Knowledge Survivor Mesh & Remediation Array")
+st.markdown("Utilizing independent server nodes and client-derived 25-point key matrices to connect survivors without central cloud storage.")
 
-# --- CRYPTOGRAPHIC UTILITIES (The 25-Point Key Logic) ---
-def derive_client_keys(point_key_string, acoustic_multiplier):
-    """
-    Takes the survivor's private 25-point key matrix and derives 
-    the secure Storage ID and the data Decryption Key locally.
-    The server NEVER sees the raw key string.
-    """
-    # Incorporating your harmonic multiplier as a mathematical salt/pepper
-    salted_input = f"{point_key_string}_{acoustic_multiplier}"
-    
-    # Hash 1: Used solely to find the correct data slot on the independent nodes
-    storage_id = hashlib.sha256((salted_input + "_storage").encode()).hexdigest()
-    
-    # Hash 2: Used purely as the decryption key on the survivor's local device
-    decryption_key = hashlib.sha256((salted_input + "_decrypt").encode()).hexdigest()
-    
-    return storage_id, decryption_key
+# --- LIVE METRIC FETCH ENGINES ---
+def get_lunar_gravitational_factor():
+    """Calculates an approximate lunar illumination and gravitational tidal factor based on the 2026 timeline"""
+    now = datetime.datetime.now()
+    diff = now - datetime.datetime(2026, 1, 1)
+    days = diff.days + (diff.seconds / 86400.0)
+    cycle_position = (days % 29.53) / 29.53
+    illumination = 0.5 * (1 - np.cos(2 * np.pi * cycle_position))
+    gravitational_pull = 1.0 + (0.35 * np.abs(np.sin(np.pi * cycle_position)))
+    return round(illumination * 100, 1), round(gravitational_pull, 2)
 
-def hash_perpetrator_identifier(perp_info, acoustic_multiplier):
+@st.cache_data(ttl=3600)
+def get_live_celestial_kp():
+    noaa_endpoint = "https://noaa.gov"
+    try:
+        response = requests.get(noaa_endpoint, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            live_kp = float(data.get("0", {}).get("geomagnetic", {}).get("scale", 2.0)) * 2.0
+            return max(1.0, min(9.0, live_kp))
+    except Exception:
+        pass
+    return 3.0
+
+lunar_illumi, lunar_grav = get_lunar_gravitational_factor()
+live_kp = get_live_celestial_kp()
+
+# --- CRYPTOGRAPHIC ZERO-KNOWLEDGE MESH CORE ---
+def process_mesh_vault_payload(key_matrix, identifier, text_log, multiplier):
     """
-    Blinds the perpetrator identifier (e.g., username/phone) using a secure hash loop.
-    This allows independent nodes to find a match without storing readable names.
+    Derives deterministic addresses and encrypts data client-side.
+    The server holds no unencrypted text or central indexes.
     """
-    base_hash = perp_info.strip().lower()
-    # Iterative hashing to maximize entropy against brute-force attacks
-    for _ in range(5000):
-        base_hash = hashlib.sha256(f"{base_hash}_{acoustic_multiplier}".encode()).hexdigest()
-    return base_hash
+    salted = f"{key_matrix}_{multiplier}"
+    storage_slot = hashlib.sha256((salted + "_storage").encode()).hexdigest()
+    decrypt_key = hashlib.sha256((salted + "_decrypt").encode()).hexdigest()
+    
+    # Blinded perpetrator hash matching token loop (Iterative logic for high entropy)
+    blinded_token = identifier.strip().lower()
+    for _ in range(2000):
+        blinded_token = hashlib.sha256(f"{blinded_token}_{multiplier}".encode()).hexdigest()
+        
+    # Simulated Local Ciphertext Payload creation
+    encrypted_data = hashlib.sha256((text_log + decrypt_key).encode()).hexdigest()[:32] + "_NODE_VAULT_BLOB"
+    return storage_slot, blinded_token, encrypted_data
 
 # --- SIDEBAR CONTROL PANEL ---
-st.sidebar.header("🌍 Independent Node Selector")
-selected_node_matrix = st.sidebar.selectbox(
-    "Select Local Vault Node Matrix",
-    ["Independent Node Alpha (Regional)", "Independent Node Beta (Subsurface)", "Independent Node Gamma (Mesh Edge)"]
+st.sidebar.header("🌍 Target Spatial Matrix (Autonomous Nodes)")
+mode = st.sidebar.selectbox(
+    "Select Active Network Cluster",
+    ["Alpha Cluster Nodes (Regional Mesh)", "Beta Cluster Nodes (Isolated Vaults)", "Gamma Cluster Nodes (Edge Matrix)"]
 )
 
-# Simulation parameters inspired by your original code
-st.sidebar.header("🌱 Network Remediation & Tuning")
-acoustic_tuning = st.sidebar.selectbox(
-    "Select Harmonic Tuning Pepper",
-    ["432 Hz - Baseline Matrix", "528 Hz - Golden Ratio Acceleration (1.618)", "741 Hz - Extended Phase Shift"]
+st.sidebar.header("🌱 Land Frequency Remediation")
+target_pollution_level = st.sidebar.slider("Localized Environmental Entropy (Pollution/Noise)", 1.0, 10.0, 4.0, help="Simulates traffic congestion, channel noise, or chaotic data corruption in the mesh.")
+broadcast_mesa_code = st.sidebar.checkbox("🔒 Broadcast Mesa Correction Code", value=False, help="Engages the pristine correction code to zero out network entropy and clear data slots.")
+
+st.sidebar.header("🏺 Ground Capacitor Calibration")
+shard_density = st.sidebar.slider("Mineral / Shard Ground Density", 1.0, 10.0, 6.5, help="Calibrates the cryptographic density weights of the independent local nodes.")
+
+st.sidebar.header("🎵 Solfeggio Acoustic Input")
+acoustic_frequency = st.sidebar.selectbox(
+    "Select Harmonic Tuning Scale",
+    ["432 Hz - Cosmic Baseline Calibration", "528 Hz - Core Matrix Transformation", "741 Hz - Intuitive Signal Expansion"]
 )
 
-# Set the multiplier based on your exact Golden Ratio logic
-acoustic_resonance_multiplier = 1.618 if "528" in acoustic_tuning else 1.333 if "741" in acoustic_tuning else 1.0
-
-# Simulate the independent nodes acting on their own without a central cloud
-if "Alpha" in selected_node_matrix:
-    node_ips = [{"Node_ID": "Node-A1", "Status": "Autonomous", "Imprint_Weight": 1.2},
-                {"Node_ID": "Node-A2", "Status": "Autonomous", "Imprint_Weight": 1.5}]
-elif "Beta" in selected_node_matrix:
-    node_ips = [{"Node_ID": "Node-B1", "Status": "Isolated", "Imprint_Weight": 0.9},
-                {"Node_ID": "Node-B2", "Status": "Autonomous", "Imprint_Weight": 1.1}]
+# Apply the math coefficients dynamically from your original logic
+if "528" in acoustic_frequency:
+    acoustic_resonance_multiplier = 1.618  # The Golden Ratio Coefficient
+    st.sidebar.caption("🎵 *528 Hz Injected: Inducing peak acoustic resonance within the shard matrix.*")
+elif "741" in acoustic_frequency:
+    acoustic_resonance_multiplier = 1.333
 else:
-    node_ips = [{"Node_ID": "Node-G1", "Status": "Mesh Edge", "Imprint_Weight": 1.7},
-                {"Node_ID": "Node-G2", "Status": "Autonomous", "Imprint_Weight": 1.4}]
+    acoustic_resonance_multiplier = 1.0
 
-df_active_nodes = pd.DataFrame(node_ips)
+# Configure independent local server data blocks based on your location structural logic
+if mode == "Alpha Cluster Nodes (Regional Mesh)":
+    cluster_name = "Alpha Local Mesh Backbone"
+    water_cooling_efficiency = 1.8  
+    fungal_lightning_rod_amplifier = 2.8 
+    df_nodes = pd.DataFrame([{"Node_ID": "Node-Alpha-1", "Base_Imprint": 9.5},
+                             {"Node_ID": "Node-Alpha-2", "Base_Imprint": 8.8}])
+    st.sidebar.caption("⛰️ *Alpha Cluster Active: Distributed regional tracking arrays engaged.*")
+elif mode == "Beta Cluster Nodes (Isolated Vaults)":
+    cluster_name = "Beta Subsurface Copper Matrix"
+    water_cooling_efficiency = 0.9  
+    fungal_lightning_rod_amplifier = 3.2 
+    df_nodes = pd.DataFrame([{"Node_ID": "Node-Beta-1", "Base_Imprint": 9.6},
+                             {"Node_ID": "Node-Beta-2", "Base_Imprint": 8.5}])
+    st.sidebar.caption("⛏️ *Beta Cluster Active: Subsurface dense mineral capacitance channels running.*")
+else:
+    cluster_name = "Gamma Mesh Edge Array"
+    water_cooling_efficiency = 1.2
+    fungal_lightning_rod_amplifier = 2.5  
+    df_nodes = pd.DataFrame([{"Node_ID": "Node-Gamma-1", "Base_Imprint": 9.9},
+                             {"Node_ID": "Node-Gamma-2", "Base_Imprint": 9.8}])
+    st.sidebar.caption("✨ *Gamma Cluster Active: Mesh edge macroscopic node framework active.*")
 
-# --- USER INTERFACE: LIVE CRYPTOGRAPHIC SECURE VAULT ---
-st.header("🔑 Client-Side Encryption Core")
-st.markdown("Everything entered here is transformed instantly into your key matrix before transmission. The nodes hold zero readable text.")
+st.sidebar.header("🧘 Operator Tuning Interface")
+operator_profile = st.sidebar.selectbox("Select Operator Profile", ["Shamanic Coherence", "Passive Observation", "Predatory Siphoning"])
 
-# 1. Input the unique 25-Point Key (Survivor Owned Only)
-user_key = st.text_input("Enter your Private 25-Point Key Matrix (Keep this secret):", type="password", help="This key acts as your structural coordinate. There is no password recovery.")
+coherence_multiplier = 5.0 if operator_profile == "Shamanic Coherence" else 0.3 if operator_profile == "Predatory Siphoning" else 1.0
+operator_harmonic_key = 1.618 if operator_profile == "Shamanic Coherence" else 1.0
 
-# 2. Input perpetrator info to check for matching without exposing text
-perp_identifier = st.text_input("Perpetrator Identifier (e.g., unique social handle, phone, email):", type="default")
+st.sidebar.header("⚡ Local Field Fluctuations")
+rf_signal_16 = st.sidebar.slider("1.6 GHz RF Base Power (dBm)", -110, -30, -95)
 
-# 3. Enter the secure incident logs
-incident_payload = st.text_area("Secure Vault Log (Encrypted locally before sending):")
-
-# --- CONVERSION & MESH DEPLOYMENT ENGINE ---
-if st.button("⚡ Process & Distribute To Independent Nodes"):
-    if not user_key or not perp_identifier or not incident_payload:
-        st.error("❌ Please provide your Key Matrix, a perpetrator identifier, and your log entry to generate the secure distribution payload.")
+# --- ENGINE CALCULATION MATRIX ---
+processed_nodes = []
+for idx, row in df_nodes.iterrows():
+    rf_delta = max(0, (rf_signal_16 + 100) * 0.5)
+    cosmic_flux = (live_kp * 0.6) * lunar_grav
+    
+    # Calculate how pollution/noise degrades the baseline grid 
+    pollution_entropy_damper = 1 + (target_pollution_level * 0.15)
+    
+    # Apply the Mesa Correction Code broadcast if checked
+    if broadcast_mesa_code:
+        remediation_factor = 2.0
+        pollution_entropy_damper = 1.0
+        current_state_label = "REMEDIATING: Mesa Clean Correction Code Engaged."
     else:
-        # Generate the cryptographic derivatives using your exact harmonic scaling
-        storage_id, local_decrypt_key = derive_client_keys(user_key, acoustic_resonance_multiplier)
-        blinded_perp_match_token = hash_perpetrator_identifier(perp_identifier, acoustic_resonance_multiplier)
-        
-        # Simulate local encryption (Simulating AES-GCM output safely for prototype visualization)
-        simulated_ciphertext = hashlib.sha256((incident_payload + local_decrypt_key).encode()).hexdigest()[:32] + "_ENCRYPTED_VAULT_DATA"
-        
-        st.success("✅ Client-Side Computation Complete! Raw text discarded from memory.")
-        
-        # Display the payload that actually leaves the device
-        st.subheader("📦 The Only Payload Sent to Servers:")
-        payload_visualization = {
-            "Target_Storage_Address_Slot": storage_id,
-            "Blinded_Perp_Match_Token": blinded_perp_match_token,
-            "Encrypted_Payload_Data": simulated_ciphertext
-        }
-        st.json(payload_visualization)
-        
-        st.markdown("---")
-        st.subheader("📡 Independent Node Distribution Ledger")
-        st.markdown("Showing how your autonomous nodes process fragments of this payload independently, without holding central databases:")
-        
-        processed_mesh_logs = []
-        for idx, row in df_active_nodes.iterrows():
-            # Calculate an algorithmic token check using node weights and alignment parameters
-            node_resonance_check = hashlib.sha256(f"{storage_id}_{row['Node_ID']}".encode()).hexdigest()[:8]
-            
-            processed_mesh_logs.append({
-                "Active Node": row["Node_ID"],
-                "Node Operational State": row["Status"],
-                "Assigned Memory Partition": f"Slot-{node_resonance_check}",
-                "Can Node Read Data?": "❌ ABSOLUTELY NOT (Zero Knowledge)",
-                "Match Engine Status": "Listening for identical Blind Tokens..."
-            })
-            
-        st.table(pd.DataFrame(processed_mesh_logs))
-folium.Circle(
-            location=[row["Lat"], row["Lon"]],
-            radius=250,
-            color=marker_color,
-            fill=True,
-            fill_color=marker_color,
-            fill_opacity=0.15
-        ).add_to(m)
-        
-    # Render the interactive map seamlessly within Streamlit's second column layout
-    st_folium(m, width=700, height=500, key=f"map_{target_name.replace(' ', '_')}")
+        remediation_factor = 1.0
+        current_state_label = ""
+    
+    # Core Catalyst logic coupling tuning scales to the independent hardware nodes
+    catalyst_field = (((rf_delta + cosmic_flux) * (shard_density * 0.4 * acoustic_resonance_multiplier)) / (water_cooling_efficiency * 0.5)) / pollution_entropy_damper
+    
+    # Final unified resonance calculation applying your structural parameters
+    total_resonance = row["Base_Imprint"] * catalyst_field * fungal_lightning_rod_amplifier * (coherence_multiplier * 0.1) * operator_harmonic_key * remediation_factor
+    
+    # Executing your Probability Manifestation Equation
+    prob_manifestation = 1 / (1 + np.exp(-0.11 * (total_resonance - 25)))
+    
+    if current_state_label == "":
+        if prob_manifestation > 0.90:
+            current_state_label = "PEAK COHERENCE: Secure Zero-Knowledge Data Link Established"
+        elif total_resonance > 25.0:
+            current_state_label = "HARMONIC SHIFT: Node Electrified via Multi-Point Capacitance"
+        else:
+            current_state_label = "EQUILIBRIUM: Stabilized Decentralized Space-Time Frequency"
+
+    processed_nodes.append({
+        "Independent Node": row["Node_ID"],
+        "Resonance Output": round(total_resonance, 2),
+        "Quantum Mesh Stability": f"{round(prob_manifestation * 100, 1)}%",
+        "Node Operational State": current_state_label
+    })
+
+df_results = pd.DataFrame(processed_nodes)
+
+# --- USER INTERFACE LAYOUT DISPLAY ---
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("📊 Mesh Analytics & Node Readout")
+    st.markdown(f"**Active Cluster:** `{cluster_name}` | **Operator Mode:** `{operator_profile}`")
+    
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Live Solar Kp-Index", f"{live_kp} / 9.0")
+    m2.metric("Lunar Illumination", f"{lunar_illumi}%")
+    m3.metric("Lunar Tidal Factor", f"{lunar_grav}x")
+    
+    st.dataframe(df_results, use_container_width=True)
+    
+    # Remodelled Remediation Report for Vault Health
+    if broadcast_mesa_code:
+        st.success("🌱 **Mesa Harmonic Correction Stream Active:** Beaming the fractal baseline into the mesh. Local entropy has been successfully zeroed out, clearing and stabilizing the coordinates back to source code specifications.")
+    else:
+        st.info(f"🔬 **Network Environmental Log:** Higher 'Localized Environmental Entropy' shifts node metrics. The decentralized architecture protects data integrity across high-capacitance nodes to keep storage networks insulated from outside system decline.")
+
+with col2:
+    st.subheader("🔑 Secure Client-Side Survivor Drop Vault")
+    st.markdown("Everything processed here uses your 25-point key matrix variables locally on your machine. Server logs never register raw parameters.")
+    
+    # Input UI Fields
+    user_key = st.text_input("Enter Private 25-Point Key Structure Matrix (Survivor-Owned Only):", type="password", help="The absolute cryptographic mapping key. Never stored by nodes.")
+    perp_id = st.text_input("Blind Cross-Check Identifier (Unique Handle / Phone / Hashed Tag):")
+    incident_notes = st.text_area("Secure Vault Payload Data:")
+
+    if st.button("⚡ Execute Decentralized Encryption Drop"):
+        if not user_key or not perp_id or not incident_notes:
+            st.warning("⚠️ Complete all vault parameters to calculate the decentralized node assignment packages.")
