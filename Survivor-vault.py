@@ -127,3 +127,14 @@ if st.button("⚡ Process & Distribute To Independent Nodes"):
             })
             
         st.table(pd.DataFrame(processed_mesh_logs))
+folium.Circle(
+            location=[row["Lat"], row["Lon"]],
+            radius=250,
+            color=marker_color,
+            fill=True,
+            fill_color=marker_color,
+            fill_opacity=0.15
+        ).add_to(m)
+        
+    # Render the interactive map seamlessly within Streamlit's second column layout
+    st_folium(m, width=700, height=500, key=f"map_{target_name.replace(' ', '_')}")
