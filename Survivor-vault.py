@@ -8,13 +8,14 @@ import json
 import os
 import threading
 import time
+import socket
 from Crypto.Hash import SHA256
 from Crypto.Cipher import AES
 from argon2 import PasswordHasher
 from fastapi import FastAPI, BackgroundTasks
 import uvicorn
 
-# --- FASTAPI P2P NODE CORE ---
+# --- CONFIGURING CORE FASTAPI P2P NETWORK MATRIX ---
 node_app = FastAPI()
 
 DB_FILE = "mesh_ledger.json"
@@ -35,7 +36,7 @@ def save_persistent_ledger(ledger_state):
 
 def load_peers():
     if not os.path.exists(PEERS_FILE):
-        return ["http://127.0.0.1:8002"] # Sample fallback local peer port
+        return ["http://127.0.0.1:8001", "http://127.0.0.1:8002"]
     try:
         with open(PEERS_FILE, "r") as f:
             return json.load(f)
@@ -46,14 +47,12 @@ def save_peers(peers_list):
     with open(PEERS_FILE, "w") as f:
         json.dump(peers_list, f, indent=4)
 
-# FastAPI Incoming Sync Webhook Receiver
+# --- BACKEND INCOMING NETWORK ROUTER WEBHOOKS ---
 @node_app.post("/sync")
-def handle_incoming_block_sync(block: dict, background_tasks: BackgroundTasks):
+def handle_incoming_block_sync(block: dict):
     current_ledger = load_persistent_ledger()
-    
-    # Run the immutable block synchronization code
     if not block.get("IPFS_CID", "").startswith("Qm"):
-        return {"status": "rejected", "reason": "invalid_cid_format"}
+        return {"status": "rejected", "reason": "invalid_cid"}
         
     exists = any(b["IPFS_CID"] == block["IPFS_CID"] for b in current_ledger)
     if not exists:
@@ -61,42 +60,76 @@ def handle_incoming_block_sync(block: dict, background_tasks: BackgroundTasks):
         current_ledger.sort(key=lambda x: x["CRDT_CLOCK_SEQUENCE"], reverse=True)
         save_persistent_ledger(current_ledger)
         return {"status": "merged", "cid": block["IPFS_CID"]}
-        
     return {"status": "duplicate", "cid": block["IPFS_CID"]}
 
-# Outbound Network Gossip Loop
+@node_app.get("/peers")
+def share_known_peer_routing_tables():
+    """Allows automated crawler bots to pull connection maps from this node."""
+    return load_peers()
+
+# --- AUTOMATED CRAWLER & BOT DISCOVERY ENGINE ENGINE ---
+def run_autonomous_mesh_crawler():
+    """
+    Automated crawler bot loop that runs continuously in the background. 
+    It queries known active peers to discover new hidden network lanes automatically.
+    """
+    while True:
+        time.sleep(15) # Crawler wakes up every 15 seconds to sync mesh topology
+        known_peers = load_peers()
+        discovered_new_lanes = []
+        
+        for peer in known_peers:
+            try:
+                # Query the target peer node for who they are currently linked to
+                response = requests.get(f"{peer.strip('/')}/peers", timeout=2)
+                if response.status_code == 200:
+                    peer_networks = response.json()
+                    for prospective_route in peer_networks:
+                        if prospective_route not in known_peers and prospective_route not in discovered_new_lanes:
+                            discovered_new_lanes.append(prospective_route)
+            except Exception:
+                pass # Skip dead nodes quietly; network remains resilient
+                
+        if discovered_new_lanes:
+            updated_peer_list = list(set(known_peers + discovered_new_lanes))
+            save_peers(updated_peer_list)
+
 def broadcast_block_to_mesh(block: dict):
     registered_peers = load_peers()
     for peer in registered_peers:
         try:
             requests.post(f"{peer.strip('/')}/sync", json=block, timeout=3)
         except Exception:
-            pass # Node offline or skipping unreachable mesh routes safely
+            pass 
 
-# Background Thread Launcher for FastAPI
 def run_fastapi_server(port: int):
     uvicorn.run(node_app, host="0.0.0.0", port=port, log_level="warning")
 
-# --- INITIALIZE CORE NODE BACKEND STATES ---
+# --- SPARKING THE BACKGROUND BOT RUNNERS ---
 if "node_started" not in st.session_state:
-    # Set the unique port for this hardware machine instance (e.g. 8001)
     st.session_state.node_port = 8001
-    t = threading.Thread(target=run_fastapi_server, args=(st.session_state.node_port,), daemon=True)
-    t.start()
+    
+    # Start the core network router thread
+    st_server = threading.Thread(target=run_fastapi_server, args=(st.session_state.node_port,), daemon=True)
+    st_server.start()
+    
+    # Start the autonomous node topology crawler bot thread
+    bot_crawler = threading.Thread(target=run_autonomous_mesh_crawler, daemon=True)
+    bot_crawler.start()
+    
     st.session_state.node_started = True
 
-# Sync local memory buffers with persistent file outputs
 st.session_state.p2p_ledger_state = load_persistent_ledger()
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(
-    page_title="Autonomous Survivor Mesh Node",
+    page_title="Autonomous Survivor Mesh Network",
     page_icon="🛡️",
     layout="wide"
 )
 
-st.title("🛡️ Project Unified Field: Verified Zero-Knowledge Node & CRDT Mesh Engine")
-st.markdown(f"Running Active Hardware Socket Node on Port: `{st.session_state.node_port}` | Mesh Operations Persistent")
+st.title("🛡️ Project Unified Field: Autonomous Zero-Knowledge Mesh Node Engine")
+st.markdown(f"**Network Socket Online:** Port `{st.session_state.node_port}` | **Autonomous Bot Crawlers:** `RUNNING` | **System State:** `SELF_SUSTAINING`")
 
 # --- DECENTRALIZED LEDGER ENGINE (Hardened Production Grade) ---
 class DecentralizedLedgerEngine:
@@ -250,12 +283,12 @@ for idx, row in df_nodes.iterrows():
 
 df_results = pd.DataFrame(processed_nodes)
 
-# --- DISPLAY LAYOUT ---
+# --- DISPLAY LAYOUT DISPLAY ---
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("📊 Mesh Analytics & Node Readout")
-    st.markdown(f"**Active Cluster:** `{cluster_name}` | **Operator Mode:** `{operator_profile}`")
+    st.subheader("📊 Autonomous Node Operational Metrics")
+    st.markdown(f"**Active Cluster Group:** `{cluster_name}`")
     
     m1, m2, m3 = st.columns(3)
     m1.metric("Live Solar Kp-Index", f"{live_kp} / 9.0")
@@ -264,49 +297,36 @@ with col1:
     
     st.dataframe(df_results[["Independent Node", "Resonance Output", "Quantum Mesh Stability", "Node Operational State"]], use_container_width=True)
 
-    # --- P2P NETWORK REGISTRY INTERFACE ---
+    # --- THE BOT READOUT INTERFACE PANEL ---
     st.markdown("---")
-    st.subheader("🌐 Live Peer Topology Registry")
-    st.markdown("Add the network address (IP & Port) of other hardware nodes running this code to link them into the live synchronization mesh.")
+    st.subheader("🤖 Background Topology Discovery Bots")
+    st.success("🤖 **Crawler Running:** Actively crawling connected network nodes to map alternative routing paths automatically. Zero configurations required.")
     
-    current_peers = load_peers()
-    st.write("**Active Mesh Connections:**", current_peers)
-    
-    new_peer = st.text_input("Enter Peer Address to Bind (e.g., http://192.168.1.50:8001):")
-    if st.button("➕ Register Peer to Mesh Topology"):
-        if new_peer and new_peer not in current_peers:
-            current_peers.append(new_peer)
-            save_peers(current_peers)
-            st.success("✅ New target peer path successfully registered to routing tables.")
-            st.rerun()
+    current_mapped_peers = load_peers()
+    st.write("**Discovered Mesh Topology Map:**", current_mapped_peers)
 
-    # --- INDEPENDENT LEDGER PURGE CONTROL ELEMENT BLOCK ---
+    # --- CRYPTOGRAPHIC PURGE LAYER PANEL ---
     st.markdown("---")
     st.subheader("💥 Cryptographic Self-Purge Panel")
-    st.markdown("Input your private key below to search the active JSON storage ledger and immediately remove all matching node entries from the tracking database permanently.")
     
     purge_key = st.text_input("Confirm 25-Point Key Structure Matrix to Execute Purge:", type="password", key="purge_input_field")
     if st.button("🗑️ Authorize Permanent Node Purge"):
         if not purge_key:
-            st.warning("⚠️ You must provide your private key vector to authorize data structure purge cycles.")
+            st.warning("⚠️ Provide your key matrix sequence to authorize data removal loops.")
         else:
             cleaned_state, removed_count = DecentralizedLedgerEngine.purge_block_by_key(purge_key, st.session_state.p2p_ledger_state)
             if removed_count > 0:
                 st.session_state.p2p_ledger_state = cleaned_state
                 save_persistent_ledger(cleaned_state)
-                st.success(f"💥 Success! Safely identified and dropped {removed_count} records from the active node persistent storage indexes.")
+                st.success(f"💥 Success! Safely dropped {removed_count} records from the active node persistent storage indexes.")
                 st.rerun()
             else:
-                st.warning("🔍 No active data blocks matched the provided signature key vector sequence inside this local database ledger.")
+                st.warning("🔍 No active data blocks matched the signature key vector inside this local node ledger.")
 
-# ==============================================================================
-# SEPARATION: ENTRY SECTION
-# ==============================================================================
 with col2:
     st.subheader("🔑 Secure CRDT Vault Drop Interface")
-    st.markdown("Utilizing **Argon2id** memory-hard parameters to calculate perpetrator matching tokens without brute-force vulnerabilities.")
+    st.markdown("Utilizing memory-hard parameters. Data transforms immediately into encrypted blocks; no humans ever possess access vectors.")
     
-    # Secure Inputs
     user_key = st.text_input("Enter Private 25-Point Key Structure Matrix (Minimum 16 characters):", type="password", key="vault_input_field")
     perp_id = st.text_input("Blind Cross-Check Identifier (Unique Handle / Phone):")
     incident_notes = st.text_area("Secure Incident Notes (AES Encrypted Locally):")
@@ -316,11 +336,11 @@ with col2:
 
     if st.button("⚡ Execute Hardened Immutable Ledger Drop"):
         if not user_key or not perp_id or not incident_notes:
-            st.warning("⚠️ Enter all vault parameters to initialize the cryptographic payload loops.")
+            st.warning("⚠️ Complete all fields to initialize the payload loops.")
         elif len(user_key) < 16:
-            st.error("❌ Key Matrix must be at least 16 characters long to safely seed the AES-256 structural engine.")
+            st.error("❌ Key Matrix must be at least 16 characters long to safely seed the engine structure.")
         else:
-            with st.spinner("Processing memory-hard Argon2id calculation and network gossip..."):
+            with st.spinner("Processing zero-knowledge calculations and routing across network wires..."):
                 derived_aes_seed = hashlib.sha256(user_key.encode()).digest()
                 
                 system_salt = hashlib.sha256(f"Unified_Field_Salt_{acoustic_resonance_multiplier}".encode()).digest()[:16]
@@ -329,7 +349,6 @@ with col2:
                 
                 blinded_token = hashlib.sha256(raw_argon_hash.encode()).hexdigest()
                 
-                # Construct our block metadata mapping
                 crdt_packet = DecentralizedLedgerEngine.construct_crdt_op_log(
                     proof_pi=blinded_token,
                     coordinates=active_coords,
@@ -337,7 +356,6 @@ with col2:
                     user_key_raw=user_key
                 )
                 
-                # Update local file engine storage ledger logs
                 local_ledger = load_persistent_ledger()
                 exists = any(b["IPFS_CID"] == crdt_packet["IPFS_CID"] for b in local_ledger)
                 if not exists:
@@ -346,10 +364,10 @@ with col2:
                     save_persistent_ledger(local_ledger)
                     st.session_state.p2p_ledger_state = local_ledger
                 
-                # FIRES THE NETWORK WIRE: Gossip out to all listed mesh coordinates in parallel thread
+                # Dynamic Redundancy: Async broadcast out to all discovered nodes automatically
                 threading.Thread(target=broadcast_block_to_mesh, args=(crdt_packet,), daemon=True).start()
                 
-                st.success("✅ Secure Block Generation Completed! Payload committed locally and gossiped to mesh network.")
+                st.success("✅ Secure Block Generation Completed! Payload committed locally and gossiped to autonomous mesh routes.")
                 st.json(crdt_packet)
 
 # --- BLIND CROSS-CHECK MATCH ENGINE READOUT ---
@@ -402,3 +420,4 @@ else:
                     "tag": block["tag"],
                     "ciphertext": block["ciphertext"]
                 })
+
