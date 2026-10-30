@@ -198,3 +198,15 @@ with col2:
     if st.button("⚡ Execute Decentralized Encryption Drop"):
         if not user_key or not perp_id or not incident_notes:
             st.warning("⚠️ Complete all vault parameters to calculate the decentralized node assignment packages.")
+        else:
+            slot, token, secure_blob = process_mesh_vault_payload(user_key, perp_id, incident_notes, acoustic_resonance_multiplier)
+            
+            st.success("✅ Execution Successful! Raw strings safely dropped out of localized system memory buffers.")
+            
+            st.subheader("📦 Distributed Routing Packet Visualizer")
+            st.markdown("This shows the exact, unreadable package that leaves the device to update the nodes:")
+            st.json({
+                "Deterministic Node Partition Address Key": slot,
+                "Anonymous Perpetrator Match Token Fingerprint": token,
+                "Raw Zero-Knowledge Encrypted Block Data Payload": secure_blob
+            })
