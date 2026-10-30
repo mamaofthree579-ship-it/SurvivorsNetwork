@@ -18,7 +18,7 @@ st.set_page_config(
 )
 
 st.title("🛡️ Project Unified Field: Verified Zero-Knowledge Node & CRDT Mesh Engine")
-st.markdown("Hardened with Argon2id matching vectors and append-only disk ledger persistence layers.")
+st.markdown("Hardened with Argon2id matching vectors, append-only disk persistence, and cryptographic self-purge mechanics.")
 
 # --- DISK-BASED LOCAL DIRECTORY DATA STORAGE ENGINE ---
 DB_FILE = "mesh_ledger.json"
@@ -43,11 +43,13 @@ if "p2p_ledger_state" not in st.session_state:
 # --- DECENTRALIZED LEDGER ENGINE (Hardened Production Grade) ---
 class DecentralizedLedgerEngine:
     @staticmethod
-    def construct_crdt_op_log(proof_pi: str, coordinates: list, secret_key: bytes) -> dict:
+    def construct_crdt_op_log(proof_pi: str, coordinates: list, secret_key: bytes, user_key_raw: str) -> dict:
         """
         Encapsulates zero-knowledge signatures inside an AES-256-GCM authenticated block,
         formatting it as an immutable append-only CRDT log payload for peer-to-peer routing.
         """
+        purge_verification_hash = hashlib.sha256(f"{user_key_raw}_PURGE_AUTHORIZATION".encode()).hexdigest()
+
         block_metadata = {
             "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
             "zkp_proof_signature": proof_pi,
@@ -72,7 +74,8 @@ class DecentralizedLedgerEngine:
             "nonce": cipher.nonce.hex(),
             "tag": tag.hex(),
             "ciphertext": ciphertext.hex(),
-            "immutable_proof_visible": block_metadata
+            "immutable_proof_visible": block_metadata,
+            "purge_verification_hash": purge_verification_hash
         }
 
     @staticmethod
@@ -90,6 +93,21 @@ class DecentralizedLedgerEngine:
         current_peer_state.append(incoming_block)
         current_peer_state.sort(key=lambda x: x["CRDT_CLOCK_SEQUENCE"], reverse=True)
         return current_peer_state
+
+    @staticmethod
+    def purge_block_by_key(user_key_raw: str, current_peer_state: list) -> tuple:
+        """
+        Walks the CRDT ledger array, identifies blocks belonging to the matching key vector,
+        and completely removes them from the node database.
+        """
+        target_purge_hash = hashlib.sha256(f"{user_key_raw}_PURGE_AUTHORIZATION".encode()).hexdigest()
+        initial_count = len(current_peer_state)
+        
+        cleaned_peer_state = [block for block in current_peer_state if block.get("purge_verification_hash") != target_purge_hash]
+        final_count = len(cleaned_peer_state)
+        
+        blocks_removed = initial_count - final_count
+        return cleaned_peer_state, blocks_removed
 
 # --- LIVE METRIC FETCH ENGINES ---
 def get_lunar_gravitational_factor():
@@ -219,16 +237,34 @@ with col1:
     
     st.dataframe(df_results[["Independent Node", "Resonance Output", "Quantum Mesh Stability", "Node Operational State"]], use_container_width=True)
 
-# ==============================================================================
-# SEPARATION: SECURE PORTION RENDERED IN ENTRY PANEL
-# ==============================================================================
+    # --- INDEPENDENT LEDGER PURGE CONTROL ELEMENT BLOCK ---
+    st.markdown("---")
+    st.subheader("💥 Cryptographic Self-Purge Panel")
+    st.markdown("Input your private key below to search the active JSON storage ledger and immediately remove all matching node entries from the tracking database permanently.")
+    
+    purge_key = st.text_input("Confirm 25-Point Key Structure Matrix to Execute Purge:", type="password", key="purge_input_field")
+    if st.button("🗑️ Authorize Permanent Node Purge"):
+        if not purge_key:
+            st.warning("⚠️ You must provide your private key vector to authorize data structure purge cycles.")
+        else:
+            cleaned_state, removed_count = DecentralizedLedgerEngine.purge_block_by_key(purge_key, st.session_state.p2p_ledger_state)
+            if removed_count > 0:
+                st.session_state.p2p_ledger_state = cleaned_state
+                save_persistent_ledger(cleaned_state)
+                st.success(f"💥 Success! Safely identified and dropped {removed_count} records from the active node persistent storage indexes.")
+                st.rerun()
+            else:
+                st.warning("🔍 No active data blocks matched the provided signature key vector sequence inside this local database ledger.")
 
+# ==============================================================================
+# SEPARATION: ENTRY BLOCK SPLIT
+# ==============================================================================
 with col2:
     st.subheader("🔑 Secure CRDT Vault Drop Interface")
     st.markdown("Utilizing **Argon2id** memory-hard parameters to calculate perpetrator matching tokens without brute-force vulnerabilities.")
     
     # Secure Inputs
-    user_key = st.text_input("Enter Private 25-Point Key Structure Matrix (Minimum 16 characters):", type="password")
+    user_key = st.text_input("Enter Private 25-Point Key Structure Matrix (Minimum 16 characters):", type="password", key="vault_input_field")
     perp_id = st.text_input("Blind Cross-Check Identifier (Unique Handle / Phone):")
     incident_notes = st.text_area("Secure Incident Notes (AES Encrypted Locally):")
     
@@ -242,26 +278,21 @@ with col2:
             st.error("❌ Key Matrix must be at least 16 characters long to safely seed the AES-256 structural engine.")
         else:
             with st.spinner("Processing memory-hard Argon2id calculation..."):
-                # 1. Derive 32-byte cryptographic secret key safely from the survivor's matrix input
                 derived_aes_seed = hashlib.sha256(user_key.encode()).digest()
                 
-                # 2. Compute a deterministic, mathematically secure match fingerprint via Argon2id
-                # Uses a fixed cryptographic salt derived from your system frequency variables
                 system_salt = hashlib.sha256(f"Unified_Field_Salt_{acoustic_resonance_multiplier}".encode()).digest()[:16]
                 ph = PasswordHasher(time_cost=2, memory_cost=65536, parallelism=4, hash_len=32)
                 raw_argon_hash = ph.hash(perp_id.strip().lower(), salt=system_salt)
                 
-                # Clean up format to extract a readable uniform hex fingerprint identifier
                 blinded_token = hashlib.sha256(raw_argon_hash.encode()).hexdigest()
                 
-                # 3. Construct the authenticated payload packet via AES-256-GCM
                 crdt_packet = DecentralizedLedgerEngine.construct_crdt_op_log(
                     proof_pi=blinded_token,
                     coordinates=active_coords,
-                    secret_key=derived_aes_seed
+                    secret_key=derived_aes_seed,
+                    user_key_raw=user_key
                 )
                 
-                # 4. Trigger persistent file storage updates to write straight to disk database
                 updated_ledger = DecentralizedLedgerEngine.simulate_p2p_gossip_sync(
                     incoming_block=crdt_packet,
                     current_peer_state=st.session_state.p2p_ledger_state
@@ -281,7 +312,6 @@ st.markdown("Scans the append-only ledger for matching zero-knowledge signatures
 if len(st.session_state.p2p_ledger_state) < 2:
     st.caption("Awaiting multiple entries in the ledger to check for network match synchronization alerts.")
 else:
-    # Build dictionary to spot match occurrences
     token_tracking_map = {}
     matches_discovered = False
     
