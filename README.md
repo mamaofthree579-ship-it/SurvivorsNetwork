@@ -103,7 +103,7 @@ docker compose up --build -d
 
 Open:
 
-[(https://github.com/mamaofthree579-ship-it/SurvivorsNetwork/blob/dce90e6741384aa3c6d05d7301d42d480fc9b478/dashboard.html)]
+[(https://github.com/mamaofthree579-ship-it/SurvivorsNetwork/)]
 
 Stop the application:
 
