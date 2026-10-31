@@ -103,7 +103,7 @@ docker compose up --build -d
 
 Open:
 
-http://127.0.0.1:8501
+[(https://github.com/mamaofthree579-ship-it/SurvivorsNetwork/blob/dce90e6741384aa3c6d05d7301d42d480fc9b478/dashboard.html)]
 
 Stop the application:
 
