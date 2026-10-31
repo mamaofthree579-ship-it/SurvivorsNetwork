@@ -34,3 +34,16 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Local crawler data
+resource_crawler_data/
+
+# Local survivor data
+local_vault/
+private_data/
+*.sqlite3
+*.db
+
+# Secrets
+.env
+secrets.json
