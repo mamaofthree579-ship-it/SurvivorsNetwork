@@ -256,3 +256,35 @@ with tab5:
         "Washington": "Washington Coalition of Sexual Assault Programs - Helpline: 360-754-7583",
         "West Virginia": "West Virginia Coalition Against Domestic Violence - Helpline: 304-965-3552",
         "Wisconsin": "Wisconsin Coalition Against Sexual Assault (WCASA) - Helpline: 608-257-1516",
+        "Wyoming": "Wyoming Coalition Against Assault & Violence Network - Helpline: 307-777-7233"
+    }
+    
+    selected_us_state = st.selectbox("Choose Your Current State / Target Region Location:", ["Select a Region Location"] + list(us_state_matrix.keys()))
+    if selected_us_state != "Select a Region Location":
+        st.info(f"🚑 **Confidential Resources Localized for {selected_us_state}:**\n\n`{us_state_matrix[selected_us_state]}`")
+        st.caption("🔒 *Privacy Notice: State query evaluation runs completely local to memory. No external tracking logs generated.*")
+
+# --- TAB 6: MODULAR NETWORK DIAGNOSTICS & PURGES ---
+with tab6:
+    st.subheader("Silent Automated Network Operations")
+    
+    del_key = st.text_input("Confirm Your Private 25-Point Access Key to Delete Data:", type="password", key="del_key_panel")
+    if st.button("🗑️ Permanently Wipe My Data From Node Logs", use_container_width=True):
+        if del_key:
+            try:
+                res = requests.post(f"{NODE_URL}/purge", json={"purge_key": del_key}).json()
+                st.success(f"💥 Permanent deletion success! Dropped {res.get('removed_count', 0)} entries.")
+                st.rerun()
+            except Exception:
+                st.error("Could not complete the purge request on the backend node.")
+
+    with st.expander("🌐 Raw Cryptographic Ledger Wire Sync Data"):
+        if not ledger_data: 
+            st.caption("No blocks synced on this node line yet.")
+        else:
+            for b in ledger_data:
+                st.json({
+                    "Block_CID": b["IPFS_CID"], 
+                    "Encrypted_Payload": b["ciphertext"], 
+                    "Public_Metadata": b["immutable_proof_visible"]
+                })
