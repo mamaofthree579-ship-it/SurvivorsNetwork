@@ -1,0 +1,22 @@
+services:
+
+  survivors-network:
+
+    build:
+      context: .
+
+    container_name: survivors-network
+
+    restart: unless-stopped
+
+    ports:
+      - "127.0.0.1:8501:8501"
+
+    environment:
+      SURVIVORS_NETWORK_HOME: /data
+
+    volumes:
+      - ./local_vault:/data
+
+    security_opt:
+      - no-new-privileges:true
