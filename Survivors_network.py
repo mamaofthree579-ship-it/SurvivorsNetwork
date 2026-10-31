@@ -1529,87 +1529,304 @@ st.markdown(
 
 )
 
-with st.sidebar:
+
+# ============================================================
+# SURVIVORS NETWORK — SENSORY SUPPORT CENTER
+# Main application: survivors_network.py
+# ============================================================
+
+from pathlib import Path
+
+AUDIO_DIR = Path("assets/audio")
+
+SOUND_LIBRARY = {
+    "Gentle rain": "gentle_rain.mp3",
+    "Forest birds": "forest_birds.mp3",
+    "Ocean waves": "ocean_waves.mp3",
+    "Flowing stream": "flowing_stream.mp3",
+    "Wind through trees": "wind_trees.mp3",
+    "Fireplace": "fireplace.mp3",
+    "Night nature": "night_nature.mp3",
+    "Soft instrumental": "soft_instrumental.mp3",
+}
+
+EXTERNAL_SOUND_RESOURCES = {
+    "Pixabay sound library": "https://pixabay.com/sound-effects/",
+    "Freesound audio library": "https://freesound.org/",
+    "Wikimedia Commons audio": "https://commons.wikimedia.org/wiki/Category:Audio_files",
+}
+
+
+def render_sensory_support_center():
+
     st.markdown("## Your Space")
 
-    st.caption("Take a moment. You are in control of what happens next.")
+    st.caption(
+        "A place to pause, explore, and find something that feels "
+        "comfortable. You choose what works for you."
+    )
+
+    # --------------------------------------------------------
+    # SOUND AND NATURE
+    # --------------------------------------------------------
+
+    with st.expander("🎵 Sound & Nature", expanded=True):
+
+        st.write(
+            "Choose an environment or sound that you find comfortable."
+        )
+
+        sound_choice = st.selectbox(
+            "Choose a sound",
+            ["Choose a sound"] + list(SOUND_LIBRARY.keys()),
+            key="sensory_sound_choice"
+        )
+
+        volume = st.slider(
+            "Sound volume",
+            min_value=0,
+            max_value=100,
+            value=35,
+            key="sensory_sound_volume"
+        )
+
+        if sound_choice != "Choose a sound":
+
+            sound_file = AUDIO_DIR / SOUND_LIBRARY[sound_choice]
+
+            if sound_file.is_file():
+
+                st.audio(
+                    str(sound_file),
+                    format="audio/mpeg"
+                )
+
+                st.caption(
+                    "Use the audio player's controls to pause or stop playback."
+                )
+
+            else:
+
+                st.info(
+                    "This sound is available when its licensed audio file "
+                    "is added to the application's assets/audio folder."
+                )
+
+                st.caption(
+                    f"Selected experience: {sound_choice}"
+                )
+
+        st.caption(
+            "Audio volume can also be adjusted using your device controls. "
+            "No sound plays automatically."
+        )
+
+        st.markdown("**Explore additional sound libraries**")
+
+        for resource_name, resource_url in EXTERNAL_SOUND_RESOURCES.items():
+            st.markdown(
+                f"- [{resource_name}]({resource_url})"
+            )
+
+        st.caption(
+            "External audio licensing and usage terms should be checked "
+            "before incorporating recordings into the application."
+        )
+
+    # --------------------------------------------------------
+    # VISUAL CALM
+    # --------------------------------------------------------
+
+    with st.expander("🌿 Visual Calm"):
+
+        visual_choice = st.selectbox(
+            "Choose a visual grounding activity",
+            [
+                "Notice the natural light",
+                "Observe a peaceful object",
+                "Look at the colors around you",
+                "Imagine a familiar peaceful place"
+            ],
+            key="visual_calm_choice"
+        )
+
+        visual_guidance = {
+            "Notice the natural light":
+                "Notice the light around you. It may be sunlight, "
+                "a lamp, or the gentle change of light in the room.",
+
+            "Observe a peaceful object":
+                "Choose an object that feels familiar or neutral. "
+                "Notice its shape, texture, and details.",
+
+            "Look at the colors around you":
+                "Notice three colors in your surroundings. "
+                "There is no need to search for anything difficult.",
+
+            "Imagine a familiar peaceful place":
+                "If comfortable, picture a place where you feel "
+                "safe, comfortable, or at ease."
+        }
+
+        st.write(visual_guidance[visual_choice])
+
+        st.caption(
+            "You can keep your eyes open, change activities, or stop."
+        )
+
+    # --------------------------------------------------------
+    # SENSORY GROUNDING
+    # --------------------------------------------------------
+
+    with st.expander("🤲 Sensory Grounding"):
+
+        st.write("Choose a sensory experience that feels comfortable.")
+
+        sensory_choice = st.radio(
+            "Select an activity",
+            [
+                "Notice the feeling of your feet on the floor",
+                "Touch a familiar object",
+                "Hold a comfortable object",
+                "Notice the temperature of the room",
+                "Simply observe your surroundings"
+            ],
+            key="sensory_grounding_choice"
+        )
+
+        st.caption(
+            "There is no required sequence. You can stop at any time."
+        )
+
+        st.write(sensory_choice)
+
+    # --------------------------------------------------------
+    # MOVEMENT AND RELEASE
+    # --------------------------------------------------------
+
+    with st.expander("🧘 Movement & Release"):
+
+        movement_choice = st.selectbox(
+            "Choose a gentle movement",
+            [
+                "Relax your hands",
+                "Gently move your shoulders",
+                "Stretch your fingers",
+                "Move your feet",
+                "Take a comfortable walk",
+                "Remain still and rest"
+            ],
+            key="movement_choice"
+        )
+
+        movement_guidance = {
+            "Relax your hands":
+                "If comfortable, allow your hands to rest without gripping.",
+
+            "Gently move your shoulders":
+                "If comfortable, gently move your shoulders and return "
+                "to a position that feels natural.",
+
+            "Stretch your fingers":
+                "Gently move or stretch your fingers without forcing them.",
+
+            "Move your feet":
+                "Try gently moving your toes or changing your foot position.",
+
+            "Take a comfortable walk":
+                "If it is safe and accessible, take a short, comfortable walk.",
+
+            "Remain still and rest":
+                "Resting without doing anything is also an option."
+        }
+
+        st.write(movement_guidance[movement_choice])
+
+    # --------------------------------------------------------
+    # BREATHING AND RELAXATION
+    # --------------------------------------------------------
+
+    with st.expander("🌬️ Breathing & Relaxation"):
+
+        st.write(
+            "If focusing on breathing feels comfortable, allow your "
+            "breathing to follow its natural rhythm."
+        )
+
+        st.write(
+            "You may allow the exhale to become gently slower, "
+            "without forcing a deep breath or holding your breath."
+        )
+
+        st.info(
+            "If breathing exercises cause discomfort, dizziness, "
+            "or increased distress, stop and choose another activity."
+        )
+
+    # --------------------------------------------------------
+    # CONNECTION AND SUPPORT
+    # --------------------------------------------------------
+
+    with st.expander("💚 Connection & Support"):
+
+        st.write(
+            "Sometimes a sense of connection can help us feel less alone."
+        )
+
+        st.markdown(
+            """
+            Some possibilities:
+
+            - Contact someone you trust, if it feels safe.
+            - Spend time with a comforting pet.
+            - Sit somewhere familiar.
+            - Listen to a familiar voice or favorite song.
+            - Choose a quiet activity that brings comfort.
+            - Take a break from communication if you need one.
+            """
+        )
+
+    # --------------------------------------------------------
+    # PAUSE AND PERSONAL CHOICE
+    # --------------------------------------------------------
+
+    with st.expander("☁️ A Moment for Yourself"):
+
+        st.markdown(
+            """
+            You do not have to:
+
+            - Finish an exercise.
+            - Explain what happened.
+            - Submit information.
+            - Continue using this application.
+            - Make a decision right now.
+
+            You can pause, leave, or return whenever you choose.
+            """
+        )
 
     st.divider()
 
-    st.markdown("### 🌿 Nervous System Reset")
-
-    reset_tool = st.selectbox(
-        "What would help right now?",
-        [
-            "Choose a reset",
-            "Orient to the present",
-            "Ground through your senses",
-            "Gentle breathing",
-            "Release physical tension",
-            "Pause and regain control"
-        ],
-        label_visibility="collapsed",
-        key="nervous_system_reset"
+    st.caption(
+        "Your choices remain yours. These activities are optional "
+        "self-guided support, not medical treatment."
     )
 
-    if reset_tool == "Orient to the present":
-        st.markdown("**Look around at your surroundings.**")
-        st.write(
-            "Without forcing yourself to do anything, notice "
-            "three things that tell you where you are right now."
-        )
-        st.write(
-            "Notice the room, the lighting, the objects around you, "
-            "or something familiar."
-        )
-        st.caption("You can keep your eyes open and stop whenever you wish.")
 
-    elif reset_tool == "Ground through your senses":
-        st.markdown("**Reconnect with your surroundings.**")
-        st.write(
-            "Notice something you can see, something you can hear, "
-            "and something you can physically feel."
-        )
-        st.write(
-            "If comfortable, touch a nearby surface and notice its texture."
-        )
-        st.caption("You do not have to complete every step.")
+# ============================================================
+# SIDEBAR
+# ============================================================
 
-    elif reset_tool == "Gentle breathing":
-        st.markdown("**Let your breathing find a comfortable rhythm.**")
-        st.write(
-            "If it feels comfortable, allow your exhale to be a little "
-            "slower than your inhale."
-        )
-        st.write(
-            "There is no required count. Do not hold your breath or "
-            "force a deeper breath."
-        )
-        st.caption(
-            "If focusing on breathing feels uncomfortable, choose "
-            "the orienting exercise instead."
-        )
+with st.sidebar:
 
-    elif reset_tool == "Release physical tension":
-        st.markdown("**Give your body permission to soften.**")
-        st.write(
-            "If comfortable, lower your shoulders, unclench your hands, "
-            "or gently move your fingers and feet."
-        )
-        st.write(
-            "You can change position, stretch, or simply remain still."
-        )
+    render_sensory_support_center()
 
-    elif reset_tool == "Pause and regain control":
-        st.markdown("**You can decide what happens next.**")
-        st.write(
-            "You do not have to finish a task, submit information, "
-            "read another page, or explain anything."
-        )
-        st.write(
-            "You can pause, leave this application, or return when "
-            "you feel ready."
-        )
+    st.divider()
+
+    st.caption(
+        "Survivors Network · Your information. Your choices."
+    )
 
     st.divider()
 
