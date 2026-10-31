@@ -1529,55 +1529,100 @@ st.markdown(
 
 )
 
+
 with st.sidebar:
+    st.markdown("## Your Space")
 
-    st.markdown("### Survivors Network")
-
-    st.caption(f"Application version {APP_VERSION}")
-
-    st.metric(
-
-        "State resource coverage",
-
-        f"{len(STATE_COALITIONS)} / 50",
-
-    )
-
-    st.metric(
-
-        "National resources",
-
-        len(NATIONAL_RESOURCES),
-
-    )
+    st.caption("Take a moment. You are in control of what happens next.")
 
     st.divider()
 
-    st.markdown("**Resource maintenance**")
+    st.markdown("### 🌿 Nervous System Reset")
 
-    st.write(
-
-        "Crawler:",
-
-        "Available" if CRAWLER_AVAILABLE else "Unavailable",
-
+    reset_tool = st.selectbox(
+        "What would help right now?",
+        [
+            "Choose a reset",
+            "Orient to the present",
+            "Ground through your senses",
+            "Gentle breathing",
+            "Release physical tension",
+            "Pause and regain control"
+        ],
+        label_visibility="collapsed",
+        key="nervous_system_reset"
     )
 
-    st.write(
+    if reset_tool == "Orient to the present":
+        st.markdown("**Look around at your surroundings.**")
+        st.write(
+            "Without forcing yourself to do anything, notice "
+            "three things that tell you where you are right now."
+        )
+        st.write(
+            "Notice the room, the lighting, the objects around you, "
+            "or something familiar."
+        )
+        st.caption("You can keep your eyes open and stop whenever you wish.")
 
-        "Directory bots:",
+    elif reset_tool == "Ground through your senses":
+        st.markdown("**Reconnect with your surroundings.**")
+        st.write(
+            "Notice something you can see, something you can hear, "
+            "and something you can physically feel."
+        )
+        st.write(
+            "If comfortable, touch a nearby surface and notice its texture."
+        )
+        st.caption("You do not have to complete every step.")
 
-        "Available" if DIRECTORY_BOTS_AVAILABLE else "Unavailable",
+    elif reset_tool == "Gentle breathing":
+        st.markdown("**Let your breathing find a comfortable rhythm.**")
+        st.write(
+            "If it feels comfortable, allow your exhale to be a little "
+            "slower than your inhale."
+        )
+        st.write(
+            "There is no required count. Do not hold your breath or "
+            "force a deeper breath."
+        )
+        st.caption(
+            "If focusing on breathing feels uncomfortable, choose "
+            "the orienting exercise instead."
+        )
 
-    )
+    elif reset_tool == "Release physical tension":
+        st.markdown("**Give your body permission to soften.**")
+        st.write(
+            "If comfortable, lower your shoulders, unclench your hands, "
+            "or gently move your fingers and feet."
+        )
+        st.write(
+            "You can change position, stretch, or simply remain still."
+        )
+
+    elif reset_tool == "Pause and regain control":
+        st.markdown("**You can decide what happens next.**")
+        st.write(
+            "You do not have to finish a task, submit information, "
+            "read another page, or explain anything."
+        )
+        st.write(
+            "You can pause, leave this application, or return when "
+            "you feel ready."
+        )
 
     st.divider()
 
+    st.markdown("### A reminder")
     st.caption(
+        "You can move at your own pace. You can stop any exercise. "
+        "You do not owe this application any information."
+    )
 
-        "Private survivor information should remain under "
+    st.divider()
 
-        "the survivor's control."
+    st.caption("Your information. Your choices.")
 
     )
 
