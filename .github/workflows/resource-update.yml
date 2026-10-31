@@ -1,0 +1,60 @@
+
+name: Survivors Network Resource Maintenance
+
+on:
+  schedule:
+    # Daily at 07:00 UTC
+    - cron: "0 7 * * *"
+
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: survivors-resource-maintenance
+  cancel-in-progress: false
+
+jobs:
+  update-public-resources:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install crawler dependency
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install requests
+
+      - name: Run resource maintenance
+        run: python resource_update.py
+
+      - name: Commit public directory maintenance data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            resource_crawler_data/snapshots.json \
+            resource_crawler_data/pending_reviews.json \
+            resource_crawler_data/state_resource_directory.json \
+            resource_crawler_data/directory_history.json \
+            resource_crawler_data/directory_exceptions.json \
+            resource_crawler_data/directory_bot_report.json \
+            resource_crawler_data/resource_maintenance_report.json
+
+          if ! git diff --cached --quiet; then
+            git commit -m "Automated public resource directory maintenance"
+            git push
+          else
+            echo "No public resource directory changes to commit."
+          fi
