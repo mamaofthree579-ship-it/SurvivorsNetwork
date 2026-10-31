@@ -1,3 +1,4 @@
+
 # Python
 __pycache__/
 *.py[cod]
@@ -18,10 +19,17 @@ env/
 *.salt
 *.key
 *.pem
+*.p12
+*.pfx
+*.keyfile
 
 # Configuration and secrets
 .env
+.env.*
+!.env.example
 .streamlit/secrets.toml
+secrets.json
+secrets.*.json
 
 # Logs
 *.log
@@ -41,9 +49,16 @@ resource_crawler_data/
 # Local survivor data
 local_vault/
 private_data/
-*.sqlite3
-*.db
 
-# Secrets
-.env
-secrets.json
+# Temporary exports and decrypted data
+exports/
+decrypted/
+temporary_data/
+*.decrypted
+*.plaintext
+*.backup
+
+# Editor and temporary files
+*.swp
+*.swo
+*~
