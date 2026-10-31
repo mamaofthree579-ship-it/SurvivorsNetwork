@@ -3,6 +3,7 @@ import json
 import datetime
 import hashlib
 import requests
+import numpy as np
 from Crypto.Hash import SHA256
 from Crypto.Cipher import AES
 from argon2 import PasswordHasher
@@ -21,13 +22,65 @@ def load_db(file_path):
 def save_db(data, file_path):
     with open(file_path, "w") as f: json.dump(data, f, indent=4)
 
+class CryptographicInvestigatorBot:
+    @staticmethod
+    def analyze_hidden_patterns(ledger):
+        """
+        Autonomous link analysis loop. Scans blinded token clusters, spatial proximity vectors,
+        and temporal sequences to flag multi-variable tracking connections humans miss.
+        """
+        if len(ledger) < 2: return []
+        
+        detected_clusters = []
+        # Spatial threshold: roughly equivalent to localized urban sector radius (~5-10km variance)
+        GEO_THRESHOLD = 0.08 
+        # Temporal threshold: rolling time window boundaries (e.g., 48 hours)
+        TIME_THRESHOLD = 172800 
+
+        for i, block_a in enumerate(ledger):
+            token_a = block_a["immutable_proof_visible"]["zkp_proof_signature"]
+            coords_a = block_a["immutable_proof_visible"].get("geo_vector_anchor", [0.0, 0.0])
+            time_a = block_a["CRDT_CLOCK_SEQUENCE"]
+            cid_a = block_a["IPFS_CID"]
+
+            for j, block_b in enumerate(ledger):
+                if i >= j: continue
+                token_b = block_b["immutable_proof_visible"]["zkp_proof_signature"]
+                coords_b = block_b["immutable_proof_visible"].get("geo_vector_anchor", [0.0, 0.0])
+                time_b = block_b["CRDT_CLOCK_SEQUENCE"]
+                cid_b = block_b["IPFS_CID"]
+
+                # Variable 1: Check for exact token signatures (Direct Match)
+                direct_match = (token_a == token_b)
+
+                # Variable 2: Calculate spatial delta vectors
+                spatial_delta = np.sqrt((coords_a[0] - coords_b[0])**2 + (coords_a[1] - coords_b[1])**2)
+                geo_proximity = (spatial_delta <= GEO_THRESHOLD) and (coords_a != [0.0, 0.0])
+
+                # Variable 3: Calculate temporal window boundaries
+                temporal_delta = abs(time_a - time_b)
+                time_proximity = (temporal_delta <= TIME_THRESHOLD)
+
+                # Internal Link Analysis Matrix: Flag hidden multi-point overlaps
+                if (direct_match and geo_proximity) or (geo_proximity and time_proximity):
+                    cluster_type = "CRITICAL: Shared Target & Proximity" if direct_match else "GEOSPATIAL: Area Pattern Divergence"
+                    detected_clusters.append({
+                        "Type": cluster_type,
+                        "Block_A_CID": cid_a,
+                        "Block_B_CID": cid_b,
+                        "Spatial_Variance": round(float(spatial_delta), 4),
+                        "Temporal_Variance_Hours": round(float(temporal_delta / 3600), 1)
+                    })
+        return detected_clusters
+
 class DecentralizedLedgerEngine:
     @staticmethod
-    def construct_crdt_op_log(proof_pi: str, secret_key: bytes, user_key_raw: str) -> dict:
+    def construct_crdt_op_log(proof_pi: str, coordinates: list, secret_key: bytes, user_key_raw: str) -> dict:
         purge_hash = hashlib.sha256(f"{user_key_raw}_PURGE_AUTHORIZATION".encode()).hexdigest()
         block_metadata = {
             "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
             "zkp_proof_signature": proof_pi,
+            "geo_vector_anchor": coordinates,
             "system_status": "VERIFIED_SECURE_NODE"
         }
         serialized = json.dumps(block_metadata, sort_keys=True).encode('utf-8')
@@ -46,7 +99,6 @@ class DecentralizedLedgerEngine:
 
 def gossip_worker(packet: dict):
     peers = load_db(PEERS_FILE)
-    if not peers: peers = ["http://127.0.0.1:8002"] # Autocomplete fallback
     for peer in peers:
         try: requests.post(f"{peer.strip('/')}/sync", json=packet, timeout=2)
         except Exception: pass
@@ -66,12 +118,13 @@ def create_entry(data: dict, background_tasks: BackgroundTasks):
     u_key = data["user_key"]
     p_id = data["perp_id"]
     notes = data["notes"]
+    coords = data.get("coordinates", [0.0, 0.0])
     
     seed = hashlib.sha256(u_key.encode()).digest()
     salt = hashlib.sha256(b"Unified_Field_Dynamic_Salt_1.618").digest()[:16]
     blinded_token = hashlib.sha256(PasswordHasher(time_cost=2, memory_cost=65536).hash(p_id.strip().lower(), salt=salt).encode()).hexdigest()
     
-    packet = DecentralizedLedgerEngine.construct_crdt_op_log(blinded_token, seed, u_key)
+    packet = DecentralizedLedgerEngine.construct_crdt_op_log(blinded_token, coords, seed, u_key)
     
     ledger = load_db(DB_FILE)
     ledger.append(packet)
@@ -90,6 +143,11 @@ def purge_records(data: dict):
     removed = len(ledger) - len(cleaned)
     save_db(cleaned, DB_FILE)
     return {"status": "success", "removed_count": removed}
+
+@app.get("/investigator")
+def run_investigator_bot():
+    ledger = load_db(DB_FILE)
+    return CryptographicInvestigatorBot.analyze_hidden_patterns(ledger)
 
 @app.get("/ledger")
 def get_ledger():
