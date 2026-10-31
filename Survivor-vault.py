@@ -4,9 +4,29 @@ import pandas as pd
 import json
 import datetime
 import hashlib
+import threading
+import os
 from Crypto.Cipher import AES
 
 NODE_URL = "http://127.0.0.1:8001"
+
+# --- AUTOMATED WEB CONTAINER BOOTSTRAP HOOK ---
+if "node_started" not in st.session_state:
+    try:
+        # Check if the node is already running in the background
+        requests.get(f"{NODE_URL}/ledger", timeout=1)
+        st.session_state.node_started = True
+    except Exception:
+        # If offline, spin up verify.py automatically in a silent background thread
+        import uvicorn
+        from verify import app as backend_fastapi_app
+        
+        def start_embedded_node():
+            uvicorn.run(backend_fastapi_app, host="127.0.0.1", port=8001, log_level="warning")
+            
+        t = threading.Thread(target=start_embedded_node, daemon=True)
+        t.start()
+        st.session_state.node_started = True
 
 st.set_page_config(page_title="Secure Portal", page_icon="🛡️", layout="centered")
 
@@ -259,60 +279,3 @@ with tab5:
     selected_us_state = st.selectbox("Choose Your Current State / Target Region Location:", ["Select a Region Location"] + list(us_state_matrix.keys()))
     if selected_us_state != "Select a Region Location":
         st.info(f"🚑 **Confidential Resources Localized for {selected_us_state}:**\n\n`{us_state_matrix[selected_us_state]}`")
-        st.caption("🔒 *Privacy Notice: State query evaluation runs completely local to memory. No external tracking logs generated.*")
-
-# --- TAB 6: TRAUMA-INFORMED SAFETY GUIDE ---
-with tab6:
-    st.subheader("📖 User Guidance & Emotional Safety Protocol")
-    st.markdown("""
-    When your internal nervous system feels overwhelmed, managing data can feel heavy or intimidating. This platform is designed to carry that weight for you silently. 
-    
-    **💡 Things to Remember:**
-    1. **Your 25-Point Key is Everything:** This key is generated entirely in your browser window. No human being, server administrator, or bot knows what it is. Because it is never stored anywhere, **there is no password reset.** Write it down or save it somewhere only you can look.
-    2. **The Identifier is Blinded:** When you enter a phone number or social handle, the system strips the text away instantly and turns it into a mathematical coordinate tag. The node monitors the network for overlaps *without* knowing who you named.
-    3. **You Always Have Control:** If you decide you want your records gone, head to the diagnostics tab, type in your key, and the system will completely shred your container blocks from the node disk permanently.
-    4. **The Panic Button:** If you feel unsafe or notice someone approaching, click the **🚨 QUICK ESCAPE** button at the top of the screen. The portal will close instantly and redirect to a neutral page.
-    """)
-
-# --- TAB 7: MODULAR NETWORK DIAGNOSTICS & PURGES ---
-with tab7:
-    st.subheader("Silent Automated Network Operations")
-    
-    # 2. LOCAL DATA CONTAINER BACKUP EXPORTER UTILITY
-    st.markdown("### 💾 Export Encrypted Node Database Backup")
-    st.markdown("Download a full backup file containing the network's zero-knowledge encrypted wire packets. You can drop this backup file straight onto any other running node to restore ledger sync arrays instantly.")
-    
-    if ledger_data:
-        json_backup_payload = json.dumps(ledger_data, indent=4)
-        st.download_button(
-            label="💾 Download Persistent Ledger Backup (.JSON)",
-            data=json_backup_payload,
-            file_name=f"Survivor_Node_Mesh_Backup_{datetime.datetime.utcnow().strftime('%Y%m%d')}.json",
-            mime="application/json",
-            use_container_width=True
-        )
-    else:
-        st.caption("No synchronized blocks available to back up yet.")
-        
-    st.markdown("---")
-    st.markdown("### 🗑️ Permanent Node Data Destruction")
-    del_key = st.text_input("Confirm Your Private 25-Point Access Key to Delete Data:", type="password", key="del_key_panel")
-    if st.button("🗑️ Permanently Wipe My Data From Node Logs", use_container_width=True):
-        if del_key:
-            try:
-                res = requests.post(f"{NODE_URL}/purge", json={"purge_key": del_key}).json()
-                st.success(f"💥 Permanent deletion success! Dropped {res.get('removed_count', 0)} entries.")
-                st.rerun()
-            except Exception:
-                st.error("Could not complete the purge request on the backend node.")
-
-    with st.expander("🌐 Raw Cryptographic Ledger Wire Sync Data"):
-        if not ledger_data: 
-            st.caption("No blocks synced on this node line yet.")
-        else:
-            for b in ledger_data:
-                st.json({
-                    "Block_CID": b["IPFS_CID"], 
-                    "Encrypted_Payload": b["ciphertext"], 
-                    "Public_Metadata": b["immutable_proof_visible"]
-                })
