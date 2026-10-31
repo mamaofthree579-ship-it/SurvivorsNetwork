@@ -70,6 +70,53 @@ import requests
 
 import streamlit as st
 
+import os
+import streamlit as st
+
+QUICK_EXIT_URL = os.getenv(
+    "SURVIVORS_QUICK_EXIT_URL",
+    "https://www.cnn.com/"
+)
+
+st.markdown(
+    """
+    <style>
+    .quick-exit-container {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 12px;
+    }
+    .quick-exit-button {
+        display: inline-block;
+        background: #8f2f38;
+        color: white !important;
+        padding: 12px 22px;
+        border-radius: 9px;
+        font-weight: 700;
+        text-decoration: none !important;
+        border: 1px solid #76252d;
+    }
+    .quick-exit-button:hover {
+        background: #76252d;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    f"""
+    <div class="quick-exit-container">
+        <a class="quick-exit-button"
+           href="{QUICK_EXIT_URL}"
+           target="_top"
+           rel="noopener noreferrer">
+           Quick Exit
+        </a>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
 # =========================================================
 
 # STREAMLIT CONFIGURATION
