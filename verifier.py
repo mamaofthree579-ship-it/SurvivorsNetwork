@@ -12,6 +12,7 @@ from fastapi import FastAPI, BackgroundTasks
 app = FastAPI()
 DB_FILE = "mesh_ledger.json"
 PEERS_FILE = "peers_registry.json"
+CHAT_FILE = "mesh_mailbox.json"
 
 def load_db(file_path):
     if not os.path.exists(file_path): return []
@@ -25,16 +26,9 @@ def save_db(data, file_path):
 class CryptographicInvestigatorBot:
     @staticmethod
     def analyze_hidden_patterns(ledger):
-        """
-        Autonomous link analysis loop. Scans blinded token clusters, spatial proximity vectors,
-        and temporal sequences to flag multi-variable tracking connections humans miss.
-        """
         if len(ledger) < 2: return []
-        
         detected_clusters = []
-        # Spatial threshold: roughly equivalent to localized urban sector radius (~5-10km variance)
         GEO_THRESHOLD = 0.08 
-        # Temporal threshold: rolling time window boundaries (e.g., 48 hours)
         TIME_THRESHOLD = 172800 
 
         for i, block_a in enumerate(ledger):
@@ -50,18 +44,12 @@ class CryptographicInvestigatorBot:
                 time_b = block_b["CRDT_CLOCK_SEQUENCE"]
                 cid_b = block_b["IPFS_CID"]
 
-                # Variable 1: Check for exact token signatures (Direct Match)
                 direct_match = (token_a == token_b)
-
-                # Variable 2: Calculate spatial delta vectors
                 spatial_delta = np.sqrt((coords_a[0] - coords_b[0])**2 + (coords_a[1] - coords_b[1])**2)
                 geo_proximity = (spatial_delta <= GEO_THRESHOLD) and (coords_a != [0.0, 0.0])
-
-                # Variable 3: Calculate temporal window boundaries
                 temporal_delta = abs(time_a - time_b)
                 time_proximity = (temporal_delta <= TIME_THRESHOLD)
 
-                # Internal Link Analysis Matrix: Flag hidden multi-point overlaps
                 if (direct_match and geo_proximity) or (geo_proximity and time_proximity):
                     cluster_type = "CRITICAL: Shared Target & Proximity" if direct_match else "GEOSPATIAL: Area Pattern Divergence"
                     detected_clusters.append({
@@ -97,12 +85,6 @@ class DecentralizedLedgerEngine:
             "purge_verification_hash": purge_hash
         }
 
-def gossip_worker(packet: dict):
-    peers = load_db(PEERS_FILE)
-    for peer in peers:
-        try: requests.post(f"{peer.strip('/')}/sync", json=packet, timeout=2)
-        except Exception: pass
-
 @app.post("/sync")
 def sync_incoming_block(block: dict):
     ledger = load_db(DB_FILE)
@@ -131,8 +113,36 @@ def create_entry(data: dict, background_tasks: BackgroundTasks):
     ledger.sort(key=lambda x: x["CRDT_CLOCK_SEQUENCE"], reverse=True)
     save_db(ledger, DB_FILE)
     
-    background_tasks.add_task(gossip_worker, packet)
     return {"status": "success", "packet": packet}
+
+@app.post("/mailbox/send")
+def send_mailbox_message(data: dict):
+    """Drops an encrypted message block into the anonymous blind match mailbox."""
+    match_token = data["match_token"]
+    encrypted_msg = data["encrypted_message"]
+    sender_nonce = data["nonce"]
+    sender_tag = data["tag"]
+    
+    mailboxes = load_db(CHAT_FILE)
+    if not isinstance(mailboxes, dict): mailboxes = {}
+    
+    if match_token not in mailboxes:
+        mailboxes[match_token] = []
+        
+    mailboxes[match_token].append({
+        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "nonce": sender_nonce,
+        "tag": sender_tag,
+        "ciphertext": encrypted_msg
+    })
+    save_db(mailboxes, CHAT_FILE)
+    return {"status": "sent"}
+
+@app.get("/mailbox/{match_token}")
+def get_mailbox_messages(match_token: str):
+    mailboxes = load_db(CHAT_FILE)
+    if not isinstance(mailboxes, dict): return []
+    return mailboxes.get(match_token, [])
 
 @app.post("/purge")
 def purge_records(data: dict):
