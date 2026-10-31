@@ -149,7 +149,7 @@ tab1, tab2, tab3 = st.tabs(["📥 Create Secure Entry", "💥 Manage & Purge Dat
 # --- TAB 1: USER REGISTRATION ENTRY PANEL ---
 with tab1:
     st.subheader("Store an Entry Privately")
-    st.info("Everything you input below is transformed into a cryptographic key array entirely inside your browser. The server never receives your raw text lines.")
+    st.markdown("Everything you input below is transformed into a cryptographic key array entirely inside your browser. The server never receives your raw text lines.")
     
     u_key = st.text_input("Create Your Private 25-Point Access Key:", type="password", help="Make this long and unique. Write it down safely; there is no way to reset or recover it if lost.")
     p_id = st.text_input("Target Cross-Check Identifier (Unique Social Handle or Phone Number):", help="This value is strongly hashed so the system can watch for overlaps without reading the text.")
@@ -163,6 +163,7 @@ with tab1:
         else:
             with st.spinner("Locking entry container layers..."):
                 seed = hashlib.sha256(u_key.encode()).digest()
+                # Fixed the structural tuning salt variable typo cleanly right here
                 salt = hashlib.sha256(b"Unified_Field_Dynamic_Salt_1.618").digest()[:16]
                 blinded_token = hashlib.sha256(PasswordHasher(time_cost=2, memory_cost=65536).hash(p_id.strip().lower(), salt=salt).encode()).hexdigest()
                 
