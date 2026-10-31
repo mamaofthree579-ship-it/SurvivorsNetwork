@@ -1529,7 +1529,6 @@ st.markdown(
 
 )
 
-
 with st.sidebar:
     st.markdown("## Your Space")
 
@@ -1623,8 +1622,6 @@ with st.sidebar:
     st.divider()
 
     st.caption("Your information. Your choices.")
-
-    )
 
 # =========================================================
 
