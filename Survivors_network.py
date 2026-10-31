@@ -1782,17 +1782,13 @@ with tabs[0]:
                     }
 
                     payload = {
-
-                        "u_key": user_key,
-
-                        "perp_id": participant_reference,
-
-                        "notes": evidence_notes,
-
-                        "coordinates": coordinates,
-
-                    }
-
+    "perp_id": participant_reference.strip(),
+    "notes": notes.strip(),
+    "coordinates": [
+        float(latitude),
+        float(longitude)
+    ] if include_location else [0.0, 0.0]
+}
                     result = api_post(
 
                         "/create-entry",
