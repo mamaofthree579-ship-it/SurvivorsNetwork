@@ -1,9 +1,9 @@
 
 """
 SURVIVORS NETWORK
-Author: Hope Jones
+Streamlit application
 
-Seven-section Streamlit application:
+Sections:
 1. Create Entry
 2. Legal Ledger Export
 3. Match Mailbox
@@ -11,30 +11,21 @@ Seven-section Streamlit application:
 5. State Resource Matrix
 6. Safety Guide
 7. Diagnostics
+8. Resource Crawler
 
-Run locally:
+Companion module:
+    resource_crawler.py
+
+Run:
     streamlit run survivors-network.py
-
-Optional backend:
-    Set SURVIVORS_API_URL to the base URL of your authorized API.
-    Example: https://your-api.example.com
-
-PRIVACY NOTICE:
-The original API design needs additional authentication, authorization,
-metadata protection, and secure purge validation before it should be used
-for real survivor records. Do not submit identifying or sensitive information
-to an unverified backend.
 """
 
 from __future__ import annotations
 
 import os
 import io
-import json
 import csv
-import hashlib
-import datetime
-from typing import Any, Optional
+import json
 from urllib.parse import quote_plus
 
 import requests
@@ -42,18 +33,18 @@ import streamlit as st
 
 
 # ============================================================
-# 1. APPLICATION CONFIGURATION
+# APPLICATION CONFIGURATION
 # ============================================================
 
+APP_VERSION = "2.1.0"
 APP_NAME = "Survivors Network"
-AUTHOR = "Hope Jones"
-APP_VERSION = "2.0.0"
+
+NODE_URL = os.getenv(
+    "SURVIVORS_API_URL",
+    ""
+).strip().rstrip("/")
 
 REQUEST_TIMEOUT = 12
-
-# Do not assume that a remote Streamlit deployment has a local API.
-# Configure this environment variable only when an API is actually deployed.
-NODE_URL = os.getenv("SURVIVORS_API_URL", "").strip().rstrip("/")
 
 st.set_page_config(
     page_title=APP_NAME,
@@ -64,7 +55,7 @@ st.set_page_config(
 
 
 # ============================================================
-# 2. RESOURCE DIRECTORY DATA — ALL 50 STATES
+# STATE RESOURCE DIRECTORY
 # ============================================================
 
 DIRECTORY_VERSION = "2.0"
@@ -85,9 +76,7 @@ NATIONAL_RESOURCES = [
         "phone": "1-800-799-7233",
         "text": "Text START to 88788",
         "website": "https://www.thehotline.org/",
-        "description": (
-            "Confidential support, safety planning, and referrals."
-        ),
+        "description": "Confidential support, safety planning, and referrals.",
     },
     {
         "name": "RAINN National Sexual Assault Hotline",
@@ -95,9 +84,7 @@ NATIONAL_RESOURCES = [
         "phone": "1-800-656-4673",
         "text": "Online chat available",
         "website": "https://rainn.org/",
-        "description": (
-            "Support and referrals for survivors of sexual violence."
-        ),
+        "description": "Support and referrals for survivors of sexual violence.",
     },
     {
         "name": "VictimConnect Resource Center",
@@ -105,9 +92,7 @@ NATIONAL_RESOURCES = [
         "phone": "1-855-484-2846",
         "text": "Online chat available",
         "website": "https://victimconnect.org/",
-        "description": (
-            "Information and referrals for victims of crime."
-        ),
+        "description": "Information and referrals for victims of crime.",
     },
     {
         "name": "StrongHearts Native Helpline",
@@ -115,10 +100,7 @@ NATIONAL_RESOURCES = [
         "phone": "1-844-762-8483",
         "text": "Text support available",
         "website": "https://strongheartshelpline.org/",
-        "description": (
-            "Culturally specific support for Native American and "
-            "Alaska Native survivors."
-        ),
+        "description": "Culturally specific survivor support.",
     },
     {
         "name": "Childhelp National Child Abuse Hotline",
@@ -126,9 +108,7 @@ NATIONAL_RESOURCES = [
         "phone": "1-800-422-4453",
         "text": "Text support available",
         "website": "https://www.childhelphotline.org/",
-        "description": (
-            "Support and information concerning child abuse."
-        ),
+        "description": "Support and information concerning child abuse.",
     },
     {
         "name": "988 Suicide & Crisis Lifeline",
@@ -136,9 +116,7 @@ NATIONAL_RESOURCES = [
         "phone": "Call or text 988",
         "text": "988",
         "website": "https://988lifeline.org/",
-        "description": (
-            "Immediate mental health crisis support."
-        ),
+        "description": "Immediate mental health crisis support.",
     },
     {
         "name": "National Human Trafficking Hotline",
@@ -146,14 +124,10 @@ NATIONAL_RESOURCES = [
         "phone": "1-888-373-7888",
         "text": "Text HELP or INFO to 233733",
         "website": "https://humantraffickinghotline.org/",
-        "description": (
-            "Support, safety planning, and referrals related to trafficking."
-        ),
+        "description": "Support and referrals related to trafficking.",
     },
 ]
 
-# Official statewide domestic-violence coalition directory.
-# The directory links are intended as starting points for local referrals.
 STATE_COALITIONS = {
     "Alabama": {
         "abbr": "AL",
@@ -335,8 +309,8 @@ STATE_COALITIONS = {
         "name": "Oklahoma Attorney General Victim Services Directory",
         "url": "https://www.oag.ok.gov/",
         "note": (
-            "The national coalition directory directs users to "
-            "Oklahoma's certified victim-service program listings."
+            "Use the state's certified victim-service program listings "
+            "to locate local services."
         ),
     },
     "Oregon": {
@@ -413,15 +387,16 @@ STATE_COALITIONS = {
 
 
 # ============================================================
-# 3. RESOURCE DIRECTORY HELPERS
+# DIRECTORY FUNCTIONS
 # ============================================================
 
-def get_state_names() -> list[str]:
+def get_state_names():
     return sorted(STATE_COALITIONS.keys())
 
 
-def get_state_resource(state: str) -> Optional[dict]:
+def get_state_resource(state):
     record = STATE_COALITIONS.get(state)
+
     if not record:
         return None
 
@@ -434,104 +409,74 @@ def get_state_resource(state: str) -> Optional[dict]:
     }
 
 
-def get_local_resource_links(
-    state: str,
-    zip_code: str = "",
-) -> list[dict]:
-    """
-    Returns referral and locator links.
-
-    These are directory links, not a guarantee that a provider is
-    currently open, accepting clients, or able to provide a specific service.
-    """
-    state_record = get_state_resource(state)
+def get_local_resource_links(state, zip_code=""):
+    record = get_state_resource(state)
 
     links = [
         {
             "name": "HUD Find Shelter",
             "category": "Shelter and housing",
             "url": "https://www.hud.gov/FindShelter",
-            "description": (
-                "Search for shelters, food assistance, clinics, "
-                "and other local support."
-            ),
+            "description": "Search for shelters, food assistance, clinics, and other local support.",
         },
         {
             "name": "211",
             "category": "Community services",
             "url": "https://www.211.org/",
-            "description": (
-                "Find local community services and referrals."
-            ),
+            "description": "Find local community services and referrals.",
         },
         {
             "name": "Findhelp",
             "category": "Community services",
             "url": "https://www.findhelp.org/",
-            "description": (
-                "Search for local assistance programs."
-            ),
+            "description": "Search for local assistance programs.",
         },
         {
             "name": "Legal Services Corporation",
             "category": "Legal assistance",
-            "url": "https://www.lsc.gov/about-lsc/what-legal-aid/"
-                   "i-need-legal-help",
-            "description": (
-                "Find federally funded civil legal-aid organizations."
-            ),
+            "url": "https://www.lsc.gov/about-lsc/what-legal-aid/i-need-legal-help",
+            "description": "Find federally funded civil legal-aid organizations.",
         },
         {
             "name": "LawHelp",
             "category": "Legal assistance",
             "url": "https://www.lawhelp.org/",
-            "description": (
-                "Find legal information and civil legal-aid resources."
-            ),
+            "description": "Find legal information and civil legal-aid resources.",
         },
         {
             "name": "DOJ Victim and Survivor Resources",
             "category": "Victim services",
-            "url": "https://www.justice.gov/ovw/"
-                   "resources-victims-and-survivors",
-            "description": (
-                "Federal victim and survivor resource directory."
-            ),
+            "url": "https://www.justice.gov/ovw/resources-victims-and-survivors",
+            "description": "Federal victim and survivor resource directory.",
         },
         {
             "name": "DOJ State and Territory Coalitions",
-            "category": "Sexual assault and domestic violence coalitions",
+            "category": "State and territory coalitions",
             "url": DOJ_STATE_SOURCE,
-            "description": (
-                "State and territory coalition directory."
-            ),
+            "description": "State and territory coalition directory.",
         },
     ]
 
-    if state_record:
+    if record:
         links.insert(
             0,
             {
-                "name": state_record["coalition_name"],
-                "category": "Statewide domestic violence coalition",
-                "url": state_record["coalition_url"],
-                "description": (
-                    "Statewide coalition and provider referral starting point."
-                ),
+                "name": record["coalition_name"],
+                "category": "Statewide coalition",
+                "url": record["coalition_url"],
+                "description": "Statewide coalition and local-provider referral starting point.",
             },
         )
 
-    # ZIP codes are not transmitted anywhere by this application.
-    # They are only shown as optional search context for the user.
     if zip_code.strip():
         links.append(
             {
-                "name": "Local provider search guidance",
+                "name": "ZIP code search guidance",
                 "category": "Local search",
                 "url": "https://www.211.org/",
                 "description": (
-                    f"Use ZIP code {zip_code.strip()} when searching "
-                    "the linked directory."
+                    f"Use ZIP code {zip_code.strip()} in the external "
+                    "directory search."
                 ),
             }
         )
@@ -539,18 +484,14 @@ def get_local_resource_links(
     return links
 
 
-def get_all_state_records() -> list[dict]:
-    records = []
-
-    for state in get_state_names():
-        record = get_state_resource(state)
-        if record:
-            records.append(record)
-
-    return records
+def get_all_state_records():
+    return [
+        get_state_resource(state)
+        for state in get_state_names()
+    ]
 
 
-def export_directory() -> dict:
+def export_directory():
     return {
         "application": APP_NAME,
         "directory_version": DIRECTORY_VERSION,
@@ -562,27 +503,23 @@ def export_directory() -> dict:
 
 
 # ============================================================
-# 4. API COMMUNICATION
+# API COMMUNICATION
 # ============================================================
 
-def api_is_configured() -> bool:
+def api_is_configured():
     return bool(NODE_URL)
 
 
-def api_get(endpoint: str, params: Optional[dict] = None) -> Any:
+def api_get(endpoint, params=None):
     if not api_is_configured():
-        raise RuntimeError(
-            "No API is configured. Set SURVIVORS_API_URL to use "
-            "the network backend."
-        )
-
-    url = f"{NODE_URL}{endpoint}"
+        raise RuntimeError("No API is configured.")
 
     response = requests.get(
-        url,
+        f"{NODE_URL}{endpoint}",
         params=params,
         timeout=REQUEST_TIMEOUT,
     )
+
     response.raise_for_status()
 
     if response.content:
@@ -591,20 +528,16 @@ def api_get(endpoint: str, params: Optional[dict] = None) -> Any:
     return {}
 
 
-def api_post(endpoint: str, payload: dict) -> Any:
+def api_post(endpoint, payload):
     if not api_is_configured():
-        raise RuntimeError(
-            "No API is configured. Set SURVIVORS_API_URL to use "
-            "the network backend."
-        )
-
-    url = f"{NODE_URL}{endpoint}"
+        raise RuntimeError("No API is configured.")
 
     response = requests.post(
-        url,
+        f"{NODE_URL}{endpoint}",
         json=payload,
         timeout=REQUEST_TIMEOUT,
     )
+
     response.raise_for_status()
 
     if response.content:
@@ -613,33 +546,28 @@ def api_post(endpoint: str, payload: dict) -> Any:
     return {}
 
 
-def show_api_error(error: Exception) -> None:
-    st.error(f"Network request could not be completed: {error}")
-
-
-def api_status_message() -> None:
+def api_status_message():
     if api_is_configured():
-        st.success(f"Network API configured: {NODE_URL}")
+        st.success("Network API configured.")
     else:
         st.info(
-            "Local interface mode: no network API is configured. "
-            "Resource browsing and directory exports are available, "
-            "but network operations require a deployed API."
+            "Local interface mode. Resource browsing and exports are "
+            "available; network functions require an API endpoint."
         )
 
 
 # ============================================================
-# 5. GENERAL DISPLAY HELPERS
+# GENERAL HELPERS
 # ============================================================
 
-def section_header(title: str, description: str = "") -> None:
+def section_header(title, description=""):
     st.subheader(title)
 
     if description:
         st.caption(description)
 
 
-def safe_download_json(data: Any, filename: str) -> None:
+def safe_download_json(data, filename):
     payload = json.dumps(
         data,
         indent=2,
@@ -648,7 +576,7 @@ def safe_download_json(data: Any, filename: str) -> None:
     )
 
     st.download_button(
-        label="Download JSON",
+        "Download JSON",
         data=payload.encode("utf-8"),
         file_name=filename,
         mime="application/json",
@@ -656,24 +584,22 @@ def safe_download_json(data: Any, filename: str) -> None:
     )
 
 
-def make_csv_download(rows: list[dict], filename: str) -> None:
+def make_csv_download(rows, filename):
     if not rows:
-        st.warning("There are no records to export.")
+        st.info("No records available to export.")
         return
 
     output = io.StringIO()
 
-    fieldnames = sorted(
-        {
-            key
-            for row in rows
-            for key in row.keys()
-        }
-    )
+    fields = sorted({
+        key
+        for row in rows
+        for key in row.keys()
+    })
 
     writer = csv.DictWriter(
         output,
-        fieldnames=fieldnames,
+        fieldnames=fields,
         extrasaction="ignore",
     )
 
@@ -682,19 +608,19 @@ def make_csv_download(rows: list[dict], filename: str) -> None:
 
     st.download_button(
         "Download CSV",
-        data=output.getvalue().encode("utf-8"),
+        output.getvalue().encode("utf-8"),
         file_name=filename,
         mime="text/csv",
         use_container_width=True,
     )
 
 
-def display_records(data: Any) -> None:
+def display_records(data):
     if isinstance(data, list):
         if data:
             st.dataframe(data, use_container_width=True)
         else:
-            st.info("No records were returned.")
+            st.info("No records returned.")
     elif isinstance(data, dict):
         st.json(data)
     else:
@@ -702,40 +628,33 @@ def display_records(data: Any) -> None:
 
 
 # ============================================================
-# 6. SIDEBAR AND APPLICATION INTRODUCTION
+# SIDEBAR
 # ============================================================
 
 st.sidebar.title("🛡️ Survivors Network")
 st.sidebar.caption(f"Version {APP_VERSION}")
-st.sidebar.caption(f"Author: {AUTHOR}")
 
 st.sidebar.markdown("---")
 
 st.sidebar.markdown(
     """
-    **Purpose**
+    **Project components**
 
-    A survivor-centered resource and record interface designed around
-    privacy, user control, and independently operated network components.
+    - Survivor-controlled records
+    - Distributed network architecture
+    - Independent resource crawlers
+    - Resource verification
+    - Legal record export
+    - State and national support directory
     """
 )
 
 st.sidebar.markdown("---")
-
-st.sidebar.markdown(
-    """
-    **Privacy reminder**
-
-    Do not enter identifying information into a network endpoint until
-    its authentication, encryption, access controls, and data-retention
-    behavior have been independently reviewed.
-    """
-)
 
 st.title("🛡️ Survivors Network")
+
 st.caption(
-    "A survivor-centered resource directory, record interface, "
-    "and distributed-network project."
+    "Survivor-centered resources, records, and network tools."
 )
 
 api_status_message()
@@ -744,20 +663,19 @@ st.markdown("---")
 
 
 # ============================================================
-# 7. ORIGINAL SEVEN-SECTION NAVIGATION
+# NAVIGATION — EIGHT SECTIONS
 # ============================================================
 
-tabs = st.tabs(
-    [
-        "Create Entry",
-        "Legal Ledger Export",
-        "Match Mailbox",
-        "Investigator",
-        "State Resource Matrix",
-        "Safety Guide",
-        "Diagnostics",
-    ]
-)
+tabs = st.tabs([
+    "Create Entry",
+    "Legal Ledger Export",
+    "Match Mailbox",
+    "Investigator",
+    "State Resource Matrix",
+    "Safety Guide",
+    "Diagnostics",
+    "Resource Crawler",
+])
 
 
 # ============================================================
@@ -767,18 +685,7 @@ tabs = st.tabs(
 with tabs[0]:
     section_header(
         "Create Entry",
-        (
-            "Create a record through the configured network API. "
-            "Use a non-identifying test record until the backend "
-            "security review is complete."
-        ),
-    )
-
-    st.warning(
-        "The original API implementation does not provide adequate "
-        "authentication and authorization. Do not submit real names, "
-        "addresses, contact details, identifying case information, "
-        "or sensitive narrative notes to that backend."
+        "Create a record through the configured network API.",
     )
 
     with st.form("create_entry_form"):
@@ -787,23 +694,15 @@ with tabs[0]:
         user_key = st.text_input(
             "User key",
             type="password",
-            help=(
-                "Do not reuse a personal account password. "
-                "The original API's key-handling design requires revision."
-            ),
         )
 
         participant_id = st.text_input(
-            "Non-identifying participant reference",
-            help="Use a random reference, not a real name.",
+            "Participant reference",
+            help="Use a non-identifying reference.",
         )
 
         notes = st.text_area(
-            "Test notes",
-            placeholder=(
-                "Use non-sensitive test information only until "
-                "the backend has been secured."
-            ),
+            "Record notes",
             height=120,
         )
 
@@ -829,26 +728,24 @@ with tabs[0]:
                 format="%.4f",
             )
 
-        confirm_test_data = st.checkbox(
-            "I confirm this is test data and contains no identifying "
-            "survivor information."
+        test_confirmation = st.checkbox(
+            "I confirm this is non-sensitive test data."
         )
 
         submitted = st.form_submit_button(
-            "Submit Test Entry",
+            "Submit Entry",
             use_container_width=True,
         )
 
     if submitted:
         if not api_is_configured():
-            st.error(
-                "No backend is configured. The entry was not sent."
-            )
+            st.error("No API is configured.")
         elif not user_key.strip() or not participant_id.strip():
-            st.error("A user key and participant reference are required.")
-        elif not confirm_test_data:
+            st.error("User key and participant reference are required.")
+        elif not test_confirmation:
             st.error(
-                "Please confirm that you are using non-sensitive test data."
+                "Confirm that the submitted information is non-sensitive "
+                "test data before using this original API."
             )
         else:
             payload = {
@@ -863,10 +760,10 @@ with tabs[0]:
 
             try:
                 result = api_post("/create-entry", payload)
-                st.success("The API returned a response.")
+                st.success("Entry submitted.")
                 display_records(result)
             except Exception as exc:
-                show_api_error(exc)
+                st.error(f"Request failed: {exc}")
 
 
 # ============================================================
@@ -876,55 +773,45 @@ with tabs[0]:
 with tabs[1]:
     section_header(
         "Legal Ledger Export",
-        (
-            "Retrieve available ledger records and export them for "
-            "independent review."
-        ),
-    )
-
-    st.info(
-        "An exported ledger is a record of what the configured API returns. "
-        "It is not, by itself, proof of authenticity, chain of custody, "
-        "immutability, or legal admissibility."
+        "Retrieve and export records returned by the network API.",
     )
 
     if st.button(
         "Retrieve Ledger",
-        key="retrieve_ledger",
         use_container_width=True,
     ):
         try:
-            ledger_result = api_get("/ledger")
-            st.session_state["ledger_result"] = ledger_result
-            st.success("Ledger response received.")
+            result = api_get("/ledger")
+            st.session_state["ledger_result"] = result
+            st.success("Ledger retrieved.")
         except Exception as exc:
-            show_api_error(exc)
+            st.error(f"Ledger retrieval failed: {exc}")
 
-    ledger_result = st.session_state.get("ledger_result")
+    ledger = st.session_state.get("ledger_result")
 
-    if ledger_result is not None:
-        display_records(ledger_result)
+    if ledger is not None:
+        display_records(ledger)
 
-        if isinstance(ledger_result, list):
+        if isinstance(ledger, list):
             make_csv_download(
-                ledger_result,
+                ledger,
                 "survivors_network_ledger.csv",
             )
 
         safe_download_json(
-            ledger_result,
+            ledger,
             "survivors_network_ledger.json",
         )
 
-    st.markdown("#### Export notes")
+    st.markdown("#### Record preservation")
 
     st.markdown(
         """
-        - Preserve the original downloaded file.
-        - Record when and from which endpoint the export was obtained.
-        - Keep a separate copy of supporting evidence.
-        - Do not assume that a server timestamp proves when an event occurred.
-        - Do not treat a hash alone as proof that a record is accurate.
+        - Preserve original downloaded records.
+        - Keep supporting evidence separately.
+        - Record collection dates and source information.
+        - Maintain a record of transfers and access.
+        - Do not treat a hash alone as proof of authenticity.
         """
     )
 
@@ -936,63 +823,48 @@ with tabs[1]:
 with tabs[2]:
     section_header(
         "Match Mailbox",
-        (
-            "Send or retrieve a mailbox message using the configured API."
-        ),
+        "Send and retrieve messages through the configured API.",
     )
 
-    st.error(
-        "The original mailbox retrieval endpoint is not adequately "
-        "protected. Anyone who knows a match token may be able to retrieve "
-        "the associated message. Do not use it for real survivor messages "
-        "until authentication and authorization are implemented."
-    )
-
-    send_tab, receive_tab = st.tabs(
-        ["Send Message", "Retrieve Message"]
-    )
+    send_tab, receive_tab = st.tabs([
+        "Send Message",
+        "Retrieve Message",
+    ])
 
     with send_tab:
         with st.form("mailbox_send_form"):
-            st.markdown("#### Send a test message")
-
-            send_match_token = st.text_input(
+            match_token = st.text_input(
                 "Match token",
-                key="send_match_token",
             )
 
             recipient_reference = st.text_input(
                 "Recipient reference",
-                key="recipient_reference",
             )
 
             message_text = st.text_area(
-                "Test message",
+                "Message",
                 height=130,
-                key="message_text",
             )
 
-            confirm_mail_test = st.checkbox(
+            confirm_test = st.checkbox(
                 "This is a non-sensitive test message."
             )
 
             send_submitted = st.form_submit_button(
-                "Send Test Message",
+                "Send Message",
                 use_container_width=True,
             )
 
         if send_submitted:
             if not api_is_configured():
-                st.error("No backend is configured.")
-            elif not send_match_token.strip():
+                st.error("No API is configured.")
+            elif not match_token.strip():
                 st.error("A match token is required.")
-            elif not confirm_mail_test:
-                st.error(
-                    "Please confirm that this is a non-sensitive test."
-                )
+            elif not confirm_test:
+                st.error("Use non-sensitive test messages only.")
             else:
                 payload = {
-                    "match_token": send_match_token.strip(),
+                    "match_token": match_token.strip(),
                     "recipient": recipient_reference.strip(),
                     "message": message_text,
                 }
@@ -1002,39 +874,40 @@ with tabs[2]:
                         "/mailbox/send",
                         payload,
                     )
-                    st.success("The API returned a response.")
                     display_records(result)
                 except Exception as exc:
-                    show_api_error(exc)
+                    st.error(f"Message submission failed: {exc}")
 
     with receive_tab:
         with st.form("mailbox_receive_form"):
-            st.markdown("#### Retrieve a test message")
-
-            receive_match_token = st.text_input(
+            retrieve_token = st.text_input(
                 "Match token",
-                key="receive_match_token",
             )
 
-            receive_submitted = st.form_submit_button(
-                "Retrieve Test Message",
+            retrieve_submitted = st.form_submit_button(
+                "Retrieve Message",
                 use_container_width=True,
             )
 
-        if receive_submitted:
+        if retrieve_submitted:
             if not api_is_configured():
-                st.error("No backend is configured.")
-            elif not receive_match_token.strip():
+                st.error("No API is configured.")
+            elif not retrieve_token.strip():
                 st.error("Enter a match token.")
             else:
                 try:
-                    token = quote_plus(receive_match_token.strip())
-                    result = api_get(
-                        f"/mailbox/{token}"
+                    encoded_token = quote_plus(
+                        retrieve_token.strip()
                     )
+
+                    result = api_get(
+                        f"/mailbox/{encoded_token}"
+                    )
+
                     display_records(result)
+
                 except Exception as exc:
-                    show_api_error(exc)
+                    st.error(f"Message retrieval failed: {exc}")
 
 
 # ============================================================
@@ -1043,24 +916,20 @@ with tabs[2]:
 
 with tabs[3]:
     section_header(
-        "Research Investigator",
-        (
-            "View the investigator output returned by the configured "
-            "network service."
-        ),
+        "Investigator",
+        "Review possible patterns identified by the network investigator.",
     )
 
     st.markdown(
         """
-        The investigator section is intended to identify possible
-        relationships among submitted records. A detected relationship
-        should be treated as a research lead, not a verified finding.
+        Investigator output is a research lead. A detected match or
+        relationship is not automatically proof of identity, coordination,
+        or causation.
         """
     )
 
     if st.button(
         "Run Investigator",
-        key="run_investigator",
         use_container_width=True,
     ):
         try:
@@ -1068,29 +937,28 @@ with tabs[3]:
             st.session_state["investigator_result"] = result
             st.success("Investigator response received.")
         except Exception as exc:
-            show_api_error(exc)
+            st.error(f"Investigator request failed: {exc}")
 
-    investigator_result = st.session_state.get(
+    investigator = st.session_state.get(
         "investigator_result"
     )
 
-    if investigator_result is not None:
-        display_records(investigator_result)
+    if investigator is not None:
+        display_records(investigator)
 
         safe_download_json(
-            investigator_result,
+            investigator,
             "survivors_network_investigator.json",
         )
 
-    st.markdown("#### Interpretation safeguards")
+    st.markdown("#### Review standards")
 
     st.markdown(
         """
-        - A pattern match is not proof of identity.
-        - A shared location does not establish a relationship.
-        - Similar timestamps do not establish coordination.
-        - An investigator result should retain its source records.
-        - Human review is required before any conclusion or action.
+        - Preserve the source records supporting each detected pattern.
+        - Distinguish correlation from verified relationships.
+        - Record uncertainty and alternative explanations.
+        - Require human review before taking action.
         """ 
     )
 
@@ -1102,51 +970,32 @@ with tabs[3]:
 with tabs[4]:
     section_header(
         "State Resource Matrix",
-        (
-            "Statewide coalition contacts and national directories "
-            "for locating local services."
-        ),
+        "Statewide coalition links and national service directories.",
     )
 
     st.caption(
         f"Directory version {DIRECTORY_VERSION} | "
-        f"Source review date: {LAST_SOURCE_REVIEW}"
+        f"Recorded source review: {LAST_SOURCE_REVIEW}"
     )
-
-    st.markdown(
-        """
-        The statewide coalition is a starting point for finding local
-        organizations. It is not a substitute for checking a provider's
-        current service area, availability, eligibility, and contact details.
-        """
-    )
-
-    state_names = get_state_names()
 
     selected_state = st.selectbox(
-        "Select a state",
-        state_names,
-        index=state_names.index("West Virginia"),
+        "Select state",
+        get_state_names(),
+        index=get_state_names().index("West Virginia"),
     )
 
     zip_code = st.text_input(
         "ZIP code (optional)",
         max_chars=10,
-        help=(
-            "This is not submitted to the network API. "
-            "Use it when searching an external directory."
-        ),
     )
 
     state_record = get_state_resource(selected_state)
 
     if state_record:
-        st.markdown("---")
         st.markdown(f"### {selected_state}")
 
         st.markdown(
-            f"**Statewide coalition:** "
-            f"{state_record['coalition_name']}"
+            f"**{state_record['coalition_name']}**"
         )
 
         st.markdown(
@@ -1154,18 +1003,16 @@ with tabs[4]:
             f"({state_record['coalition_url']})"
         )
 
-        if state_record.get("note"):
+        if state_record["note"]:
             st.info(state_record["note"])
 
     st.markdown("---")
-    st.markdown("### Local and statewide service directories")
+    st.markdown("### Local and statewide resources")
 
-    local_links = get_local_resource_links(
+    for item in get_local_resource_links(
         selected_state,
         zip_code,
-    )
-
-    for item in local_links:
+    ):
         with st.container(border=True):
             st.markdown(f"**{item['name']}**")
             st.caption(item["category"])
@@ -1187,12 +1034,13 @@ with tabs[4]:
                 st.write(f"Text: {resource['text']}")
 
             st.write(resource["description"])
+
             st.markdown(
                 f"[Open official resource]({resource['website']})"
             )
 
     st.markdown("---")
-    st.markdown("### Directory sources")
+    st.markdown("### Directory source references")
 
     st.markdown(
         f"- [NNEDV State and U.S. Territory Coalitions]({NNEDV_SOURCE})"
@@ -1220,19 +1068,11 @@ with tabs[4]:
     )
 
     st.markdown("---")
-    st.markdown("### Export resource directory")
-
-    directory_data = export_directory()
+    st.markdown("### Export directory")
 
     safe_download_json(
-        directory_data,
+        export_directory(),
         "survivors_network_50_state_resource_directory.json",
-    )
-
-    st.caption(
-        "This export contains statewide coalition records and national "
-        "directory links. It does not claim to contain every local shelter, "
-        "provider, or county-level service."
     )
 
 
@@ -1243,32 +1083,20 @@ with tabs[4]:
 with tabs[5]:
     section_header(
         "Safety Guide",
-        (
-            "Practical privacy and safety reminders for using digital "
-            "resources and maintaining records."
-        ),
-    )
-
-    st.warning(
-        "If someone may be monitoring your device, browser, email, "
-        "or accounts, consider whether opening or saving resources "
-        "could be visible to that person."
+        "Digital privacy, evidence preservation, and resource access.",
     )
 
     st.markdown("### Digital safety")
 
     st.markdown(
         """
-        - Use a device and account that the other person cannot access,
-          when possible.
-        - Review shared-device access, browser history, saved passwords,
-          location sharing, and account recovery settings.
-        - Be aware that private browsing does not make activity invisible
-          to network administrators, device monitoring software, or
-          account owners.
-        - Avoid storing sensitive records in shared cloud folders.
-        - Use a strong, unique password for each important account.
-        - Enable multifactor authentication when it is safe to do so.
+        - Consider whether your device or accounts are monitored.
+        - Review shared-device access and account recovery settings.
+        - Review location-sharing permissions.
+        - Be aware that private browsing does not hide activity from
+          device monitoring software or network administrators.
+        - Avoid shared cloud folders for sensitive records.
+        - Use unique passwords and multifactor authentication when safe.
         - Consider whether notifications could reveal sensitive activity.
         """
     )
@@ -1277,40 +1105,28 @@ with tabs[5]:
 
     st.markdown(
         """
-        - Preserve original files when possible.
-        - Keep a separate working copy for annotations.
-        - Record the date and time an item was collected.
-        - Preserve source URLs and relevant context.
-        - Avoid editing the original image, message, or document.
-        - Keep a log of who collected, transferred, or reviewed each item.
-        - Do not assume that a screenshot alone establishes authenticity.
+        - Preserve original files whenever possible.
+        - Keep separate working copies for annotations.
+        - Record collection dates and source URLs.
+        - Preserve surrounding context.
+        - Maintain a transfer and access log.
+        - Do not assume screenshots alone establish authenticity.
         """
     )
 
-    st.markdown("### Record privacy")
+    st.markdown("### Data protection")
 
     st.markdown(
         """
-        - Avoid putting real names in participant-reference fields.
-        - Do not place passwords, account recovery answers, or government
-          identification numbers in notes.
-        - Do not send sensitive records to an unverified endpoint.
-        - Confirm who controls the server before uploading information.
-        - Understand the retention and deletion behavior of any service.
+        - Avoid real names in participant-reference fields.
+        - Do not enter passwords or account recovery answers into notes.
+        - Confirm who controls a server before uploading records.
+        - Understand data retention and deletion procedures.
+        - Do not send sensitive information to unverified endpoints.
         """
     )
 
-    st.markdown("### Immediate support")
-
-    st.markdown(
-        """
-        If you are in immediate danger, contact emergency services
-        when it is safe to do so.
-
-        For confidential support and referrals, the State Resource Matrix
-        contains national and state-level starting points.
-        """
-    )
+    st.markdown("### Support")
 
     st.markdown(
         "[National Domestic Violence Hotline](https://www.thehotline.org/)"
@@ -1332,140 +1148,376 @@ with tabs[5]:
 with tabs[6]:
     section_header(
         "Diagnostics",
-        (
-            "Inspect the local interface configuration and test the "
-            "configured API connection."
-        ),
+        "Application, directory, and API configuration checks.",
     )
 
     st.markdown("### Application")
 
-    st.write(f"Application: {APP_NAME}")
-    st.write(f"Author: {AUTHOR}")
-    st.write(f"Version: {APP_VERSION}")
-    st.write(f"Directory version: {DIRECTORY_VERSION}")
-    st.write(f"States in directory: {len(STATE_COALITIONS)}")
+    st.write("Application:", APP_NAME)
+    st.write("Version:", APP_VERSION)
+    st.write("Directory version:", DIRECTORY_VERSION)
+    st.write("State count:", len(STATE_COALITIONS))
 
-    expected_states = 50
-    actual_states = len(STATE_COALITIONS)
-
-    if actual_states == expected_states:
-        st.success("All 50 states are represented in the directory.")
+    if len(STATE_COALITIONS) == 50:
+        st.success("All 50 states are represented.")
     else:
         st.error(
-            f"Directory count mismatch: {actual_states} of "
-            f"{expected_states} states."
+            f"Expected 50 states; found {len(STATE_COALITIONS)}."
         )
 
-    st.markdown("### Backend configuration")
+    abbreviations = [
+        record["abbr"]
+        for record in STATE_COALITIONS.values()
+    ]
 
-    if api_is_configured():
-        st.success("API base URL is configured.")
-        st.code(NODE_URL, language="text")
+    if len(abbreviations) == len(set(abbreviations)):
+        st.success("No duplicate state abbreviations.")
     else:
-        st.info(
-            "No API base URL is configured. Network features are inactive."
-        )
-
-    if st.button(
-        "Test API Connection",
-        key="test_api_connection",
-        use_container_width=True,
-    ):
-        if not api_is_configured():
-            st.error(
-                "Set SURVIVORS_API_URL before testing the API."
-            )
-        else:
-            try:
-                result = api_get("/")
-                st.success("The API responded.")
-                display_records(result)
-            except Exception as exc:
-                show_api_error(exc)
-
-    st.markdown("---")
-    st.markdown("### Resource directory integrity")
-
-    state_records = get_all_state_records()
-
-    duplicate_abbreviations = []
-    seen_abbreviations = set()
-
-    for record in state_records:
-        abbreviation = record["abbr"]
-
-        if abbreviation in seen_abbreviations:
-            duplicate_abbreviations.append(abbreviation)
-
-        seen_abbreviations.add(abbreviation)
-
-    if duplicate_abbreviations:
-        st.error(
-            "Duplicate state abbreviations: "
-            + ", ".join(duplicate_abbreviations)
-        )
-    else:
-        st.success("No duplicate state abbreviations detected.")
+        st.error("Duplicate state abbreviations detected.")
 
     missing_urls = [
-        record["state"]
-        for record in state_records
-        if not record["coalition_url"].startswith("https://")
+        state
+        for state, record in STATE_COALITIONS.items()
+        if not record["url"].startswith("https://")
     ]
 
     if missing_urls:
         st.warning(
-            "Records with missing or non-HTTPS URLs: "
+            "Non-HTTPS resource links: "
             + ", ".join(missing_urls)
         )
     else:
-        st.success("All state coalition records have HTTPS links.")
+        st.success("All state coalition links use HTTPS.")
 
     st.markdown("---")
-    st.markdown("### Source review")
+    st.markdown("### API")
 
-    st.write(f"Last source review recorded: {LAST_SOURCE_REVIEW}")
+    if api_is_configured():
+        st.success("API base URL is configured.")
+    else:
+        st.info("No API base URL is configured.")
 
-    st.markdown(
-        """
-        The date above identifies the directory's recorded review date.
-        It does not mean that every individual provider's phone number,
-        service availability, or website was independently tested on that
-        date. Check the provider's official source before relying on it.
-        """
-    )
+    if st.button(
+        "Test API Connection",
+        use_container_width=True,
+    ):
+        if not api_is_configured():
+            st.error("Configure SURVIVORS_API_URL first.")
+        else:
+            try:
+                result = api_get("/")
+                st.success("API responded.")
+                display_records(result)
+            except Exception as exc:
+                st.error(f"Connection failed: {exc}")
 
     st.markdown("---")
-    st.markdown("### Current application limitations")
+    st.markdown("### Crawler module")
 
-    limitations = [
-        "The Streamlit interface does not itself create a decentralized network.",
-        "A configured API must provide its own authentication and access controls.",
-        "The original API's mailbox endpoint needs authorization before real use.",
-        "The original API's purge mechanism needs cryptographic authorization.",
-        "A hash or generated CID does not independently prove record authenticity.",
-        "The state directory is a referral index, not a complete local-provider database.",
-        "A GitHub Pages website cannot run this Python application or host its private database.",
+    try:
+        import resource_crawler
+
+        st.success(
+            f"Resource crawler loaded: "
+            f"{resource_crawler.CRAWLER_VERSION}"
+        )
+
+    except ImportError:
+        st.error(
+            "resource_crawler.py is not available in the project directory."
+        )
+
+    st.markdown("---")
+    st.markdown("### Project components")
+
+    components = [
+        "Create Entry",
+        "Legal Ledger Export",
+        "Match Mailbox",
+        "Investigator",
+        "50-State Resource Matrix",
+        "Safety Guide",
+        "Diagnostics",
+        "Independent Resource Crawler",
+        "Human Review Queue",
     ]
 
-    for limitation in limitations:
-        st.markdown(f"- {limitation}")
+    for component in components:
+        st.write(f"✓ {component}")
 
 
 # ============================================================
-# 8. FOOTER
+# TAB 8 — INDEPENDENT RESOURCE CRAWLER
+# ============================================================
+
+with tabs[7]:
+    section_header(
+        "Independent Resource Crawler",
+        "Monitor public resource sources and review detected changes.",
+    )
+
+    try:
+        from resource_crawler import (
+            run_crawl,
+            get_crawler_status,
+            get_pending_reviews,
+            get_all_reviews,
+            review_change,
+            export_review_queue,
+            build_source_registry,
+        )
+
+        crawler_available = True
+
+    except ImportError as exc:
+        crawler_available = False
+        st.error(
+            "The crawler module could not be loaded. "
+            "Add resource_crawler.py to the repository."
+        )
+        st.code(str(exc))
+
+    if crawler_available:
+        st.markdown("### Crawler status")
+
+        status = get_crawler_status()
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        col1.metric(
+            "Sources recorded",
+            status["sources_with_snapshots"],
+        )
+
+        col2.metric(
+            "Pending review",
+            status["pending_reviews"],
+        )
+
+        col3.metric(
+            "Approved",
+            status["approved_reviews"],
+        )
+
+        col4.metric(
+            "Rejected",
+            status["rejected_reviews"],
+        )
+
+        st.markdown("---")
+        st.markdown("### Run resource check")
+
+        state_sources = {
+            state: {
+                "abbr": record["abbr"],
+                "name": record["name"],
+                "url": record["url"],
+            }
+            for state, record in STATE_COALITIONS.items()
+        }
+
+        crawl_scope = st.radio(
+            "Crawl scope",
+            [
+                "All state and national sources",
+                "State coalition sources only",
+                "National sources only",
+            ],
+        )
+
+        if st.button(
+            "Start Resource Crawl",
+            use_container_width=True,
+            key="start_resource_crawl",
+        ):
+            all_sources = build_source_registry(
+                state_sources
+            )
+
+            if crawl_scope == "State coalition sources only":
+                selected_ids = [
+                    source["source_id"]
+                    for source in all_sources
+                    if source["source_id"].startswith("state_")
+                ]
+
+            elif crawl_scope == "National sources only":
+                selected_ids = [
+                    source["source_id"]
+                    for source in all_sources
+                    if source["source_id"].startswith("national_")
+                ]
+
+            else:
+                selected_ids = None
+
+            with st.spinner(
+                "Checking registered public resource websites..."
+            ):
+                try:
+                    result = run_crawl(
+                        state_coalitions=state_sources,
+                        selected_source_ids=selected_ids,
+                    )
+
+                    st.session_state["last_crawl_result"] = result
+
+                    st.success("Resource crawl completed.")
+
+                except Exception as exc:
+                    st.error(f"Crawl failed: {exc}")
+
+        last_crawl = st.session_state.get(
+            "last_crawl_result"
+        )
+
+        if last_crawl:
+            st.markdown("### Latest crawl results")
+
+            col1, col2, col3 = st.columns(3)
+
+            col1.metric(
+                "Checked",
+                last_crawl["sources_attempted"],
+            )
+
+            col2.metric(
+                "Changed",
+                last_crawl["changed"],
+            )
+
+            col3.metric(
+                "Errors",
+                last_crawl["errors"],
+            )
+
+            st.dataframe(
+                last_crawl["results"],
+                use_container_width=True,
+            )
+
+            safe_download_json(
+                last_crawl,
+                "resource_crawl_results.json",
+            )
+
+        st.markdown("---")
+        st.markdown("### Pending human review")
+
+        pending = get_pending_reviews()
+
+        if not pending:
+            st.success(
+                "There are no pending resource changes."
+            )
+
+        for item in pending:
+            with st.expander(
+                f"{item['source_name']} — {item['change_type']}"
+            ):
+                st.write("Source:", item["source_url"])
+
+                st.write(
+                    "Location:",
+                    item.get("state") or "National",
+                )
+
+                st.write(
+                    "Detected:",
+                    item["detected_at"],
+                )
+
+                st.markdown("**Previous content**")
+
+                st.text(
+                    item.get("previous_excerpt")
+                    or "No previous snapshot."
+                )
+
+                st.markdown("**Current content**")
+
+                st.text(
+                    item.get("current_excerpt", "")
+                )
+
+                st.caption(
+                    "A page change is not necessarily a change in "
+                    "provider contact information. Verify the specific "
+                    "resource before approving an update."
+                )
+
+                reviewer_note = st.text_area(
+                    "Review note",
+                    key=f"review_note_{item['change_id']}",
+                )
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    if st.button(
+                        "Approve for manual update",
+                        key=f"approve_{item['change_id']}",
+                    ):
+                        try:
+                            review_change(
+                                storage_dir="resource_crawler_data",
+                                change_id=item["change_id"],
+                                decision="approved",
+                                reviewer_note=reviewer_note,
+                            )
+
+                            st.success(
+                                "Review approved. "
+                                "The directory itself was not changed."
+                            )
+
+                            st.rerun()
+
+                        except Exception as exc:
+                            st.error(str(exc))
+
+                with col2:
+                    if st.button(
+                        "Reject",
+                        key=f"reject_{item['change_id']}",
+                    ):
+                        try:
+                            review_change(
+                                storage_dir="resource_crawler_data",
+                                change_id=item["change_id"],
+                                decision="rejected",
+                                reviewer_note=reviewer_note,
+                            )
+
+                            st.success("Review rejected.")
+                            st.rerun()
+
+                        except Exception as exc:
+                            st.error(str(exc))
+
+        st.markdown("---")
+        st.markdown("### Review history")
+
+        all_reviews = get_all_reviews()
+
+        if all_reviews:
+            st.dataframe(
+                all_reviews,
+                use_container_width=True,
+            )
+
+        safe_download_json(
+            export_review_queue(),
+            "resource_review_queue.json",
+        )
+
+
+# ============================================================
+# FOOTER
 # ============================================================
 
 st.markdown("---")
 
 st.caption(
-    f"{APP_NAME} | Version {APP_VERSION} | "
-    f"Project author: {AUTHOR}"
-)
-
-st.caption(
-    "Resource links are provided as starting points. "
-    "Verify current contact information, availability, and eligibility "
-    "directly with each provider."
+    f"{APP_NAME} | Version {APP_VERSION}"
 )
