@@ -1,1525 +1,1102 @@
+
+"""
+Survivors Network — Public Resource Directory Crawler
+
+Purpose:
+- Check public state coalition and national resource websites.
+- Respect robots.txt and apply request rate limits.
+- Detect changes to public resource pages.
+- Save snapshots and place detected changes in a human-review queue.
+- Never automatically alter the Survivors Network resource directory.
+- Never collect survivor records, private messages, or account credentials.
+
+This module is designed to be imported by survivors-network.py.
+"""
+
 from __future__ import annotations
 
-import os
-
-import re
-
+import hashlib
 import json
-
+import logging
+import re
 import time
 
-import hashlib
-
-import logging
-
-from pathlib import Path
-
 from datetime import datetime, timezone
-
 from html.parser import HTMLParser
-
-from urllib.parse import urlparse
-
+from pathlib import Path
+from typing import Any, Optional
+from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
 import requests
 
-# ============================================================
 
+# ---------------------------------------------------------
 # CONFIGURATION
+# ---------------------------------------------------------
 
-# ============================================================
+DATA_DIR = Path("resource_crawler_data")
 
-CRAWLER_VERSION = "1.0"
-
-DEFAULT_STORAGE = Path("resource_crawler_data")
+SNAPSHOT_FILE = DATA_DIR / "snapshots.json"
+REVIEW_FILE = DATA_DIR / "pending_reviews.json"
+ACTIVITY_FILE = DATA_DIR / "activity_log.json"
 
 REQUEST_TIMEOUT = 15
-
-MAX_RESPONSE_BYTES = 3_000_000
-
-REQUEST_DELAY_SECONDS = 2.0
+REQUEST_DELAY_SECONDS = 2
+MAX_PAGE_BYTES = 2_000_000
+MAX_REDIRECTS = 4
 
 USER_AGENT = (
-
     "SurvivorsNetworkResourceCrawler/1.0 "
-
-    "(public-resource-directory; contact: project-maintainer)"
-
+    "(public resource directory maintenance; "
+    "contact the project maintainer through the project repository)"
 )
 
-NATIONAL_SOURCES = [
+HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "text/html,application/xhtml+xml",
+}
 
-    {
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("survivors_network_crawler")
 
-        "name": "NNEDV State and U.S. Territory Coalitions",
 
-        "category": "National coalition directory",
-
-        "url": (
-
-            "https://nnedv.org/content/"
-
-            "state-u-s-territory-coalitions/"
-
-        ),
-
-    },
-
-    {
-
-        "name": "DOJ State and Territory Coalitions",
-
-        "category": "National coalition directory",
-
-        "url": (
-
-            "https://www.justice.gov/ovw/"
-
-            "state-and-territory-coalitions"
-
-        ),
-
-    },
-
-    {
-
-        "name": "Legal Services Corporation",
-
-        "category": "Legal assistance directory",
-
-        "url": (
-
-            "https://www.lsc.gov/about-lsc/"
-
-            "what-legal-aid/i-need-legal-help"
-
-        ),
-
-    },
-
-    {
-
-        "name": "HUD Find Shelter",
-
-        "category": "Shelter directory",
-
-        "url": "https://www.hud.gov/FindShelter",
-
-    },
-
-    {
-
-        "name": "211",
-
-        "category": "Community services directory",
-
-        "url": "https://www.211.org/",
-
-    },
-
-    {
-
-        "name": "Findhelp",
-
-        "category": "Community services directory",
-
-        "url": "https://www.findhelp.org/",
-
-    },
-
-]
-
-logging.basicConfig(
-
-    level=logging.INFO,
-
-    format="%(asctime)s | %(levelname)s | %(message)s",
-
-)
-
-LOGGER = logging.getLogger("survivors_resource_crawler")
-
-# ============================================================
-
-# HTML TEXT EXTRACTION
-
-# ============================================================
-
-class PublicPageTextParser(HTMLParser):
-
-    """
-
-    Extract visible page text without requiring BeautifulSoup.
-
-    Scripts, styles, navigation metadata, and other non-content
-
-    sections are excluded from the extracted text.
-
-    """
-
-    IGNORED_TAGS = {
-
-        "script",
-
-        "style",
-
-        "noscript",
-
-        "svg",
-
-        "head",
-
-    }
-
-    def __init__(self):
-
-        super().__init__()
-
-        self.parts = []
-
-        self.ignore_depth = 0
-
-    def handle_starttag(self, tag, attrs):
-
-        if tag.lower() in self.IGNORED_TAGS:
-
-            self.ignore_depth += 1
-
-    def handle_endtag(self, tag):
-
-        if tag.lower() in self.IGNORED_TAGS:
-
-            self.ignore_depth = max(0, self.ignore_depth - 1)
-
-    def handle_data(self, data):
-
-        if self.ignore_depth == 0 and data.strip():
-
-            self.parts.append(data.strip())
-
-    def get_text(self):
-
-        return " ".join(self.parts)
-
-def extract_page_text(html: str) -> str:
-
-    parser = PublicPageTextParser()
-
-    parser.feed(html)
-
-    text = parser.get_text()
-
-    text = re.sub(r"\s+", " ", text)
-
-    text = re.sub(r"\b(cookie|cookies)\b", "", text, flags=re.I)
-
-    return text.strip()
-
-# ============================================================
-
-# STORAGE
-
-# ============================================================
+# ---------------------------------------------------------
+# JSON STORAGE
+# ---------------------------------------------------------
 
 class CrawlerStorage:
+    """Local JSON storage with atomic file replacement."""
 
-    def __init__(self, storage_dir=DEFAULT_STORAGE):
+    def __init__(self, directory: Path = DATA_DIR):
+        self.directory = Path(directory)
+        self.directory.mkdir(parents=True, exist_ok=True)
 
-        self.storage_dir = Path(storage_dir)
+        self.snapshot_file = self.directory / "snapshots.json"
+        self.review_file = self.directory / "pending_reviews.json"
+        self.activity_file = self.directory / "activity_log.json"
 
-        self.storage_dir.mkdir(
-
-            parents=True,
-
-            exist_ok=True,
-
-        )
-
-        self.snapshots_file = (
-
-            self.storage_dir / "source_snapshots.json"
-
-        )
-
-        self.review_file = (
-
-            self.storage_dir / "review_queue.json"
-
-        )
-
-        self.activity_file = (
-
-            self.storage_dir / "crawler_activity.json"
-
-        )
-
-    @staticmethod
-
-    def read_json(path: Path, default):
-
+    def read_json(self, path: Path, default: Any) -> Any:
         if not path.exists():
-
             return default
 
         try:
-
             with path.open("r", encoding="utf-8") as file:
-
                 return json.load(file)
+        except (json.JSONDecodeError, OSError):
+            logger.exception("Could not read %s", path)
+            return default
 
-        except (OSError, json.JSONDecodeError):
+    def write_json(self, path: Path, data: Any) -> bool:
+        path.parent.mkdir(parents=True, exist_ok=True)
 
-            LOGGER.exception("Could not read %s", path)
+        temporary_path = path.with_suffix(path.suffix + ".tmp")
 
-            raise RuntimeError(
+        try:
+            with temporary_path.open("w", encoding="utf-8") as file:
+                json.dump(data, file, indent=2, ensure_ascii=False)
 
-                f"Storage file could not be read safely: {path}"
+            temporary_path.replace(path)
+            return True
 
-            )
+        except OSError:
+            logger.exception("Could not write %s", path)
 
-    @staticmethod
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
-    def write_json(path: Path, data):
+            return False
 
-        temporary = path.with_suffix(path.suffix + ".tmp")
+    def get_snapshots(self) -> dict:
+        return self.read_json(self.snapshot_file, {})
 
-        with temporary.open("w", encoding="utf-8") as file:
+    def save_snapshots(self, snapshots: dict) -> bool:
+        return self.write_json(self.snapshot_file, snapshots)
 
-            json.dump(
+    def get_reviews(self) -> list:
+        return self.read_json(self.review_file, [])
 
-                data,
+    def save_reviews(self, reviews: list) -> bool:
+        return self.write_json(self.review_file, reviews)
 
-                file,
+    def get_activity(self) -> list:
+        return self.read_json(self.activity_file, [])
 
-                indent=2,
-
-                ensure_ascii=False,
-
-            )
-
-        os.replace(temporary, path)
-
-    def get_snapshots(self):
-
-        return self.read_json(
-
-            self.snapshots_file,
-
-            {},
-
-        )
-
-    def save_snapshots(self, snapshots):
-
-        self.write_json(
-
-            self.snapshots_file,
-
-            snapshots,
-
-        )
-
-    def get_review_queue(self):
-
-        return self.read_json(
-
-            self.review_file,
-
-            [],
-
-        )
-
-    def save_review_queue(self, queue):
-
-        self.write_json(
-
-            self.review_file,
-
-            queue,
-
-        )
-
-    def get_activity(self):
-
-        return self.read_json(
-
-            self.activity_file,
-
-            [],
-
-        )
-
-    def add_activity(self, event):
-
+    def log_activity(self, event: str, details: Optional[dict] = None):
         activity = self.get_activity()
 
-        activity.append(event)
+        activity.append({
+            "timestamp": utc_now(),
+            "event": event,
+            "details": details or {},
+        })
 
-        # Keep the most recent 2,000 activity records.
+        # Keep the local activity log bounded.
+        self.write_json(self.activity_file, activity[-2000:])
 
-        activity = activity[-2000:]
 
-        self.write_json(
+# ---------------------------------------------------------
+# GENERAL HELPERS
+# ---------------------------------------------------------
 
-            self.activity_file,
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
-            activity,
 
+def normalize_url(url: str) -> str:
+    return (url or "").strip().rstrip("/")
+
+
+def get_hostname(url: str) -> str:
+    return (urlparse(url).hostname or "").lower()
+
+
+def valid_public_url(url: str) -> bool:
+    """Reject non-HTTP URLs and URLs without a hostname."""
+
+    try:
+        parsed = urlparse(url)
+
+        return (
+            parsed.scheme in ("http", "https")
+            and bool(parsed.hostname)
+            and not parsed.username
+            and not parsed.password
         )
 
-# ============================================================
-
-# SOURCE REGISTRY
-
-# ============================================================
-
-def build_source_registry(state_coalitions):
-
-    """
-
-    Convert the application's state directory into crawler sources.
-
-    Expected state_coalitions structure:
-
-    {
-
-        "West Virginia": {
-
-            "abbr": "WV",
-
-            "name": "Coalition Name",
-
-            "url": "https://example.org/"
-
-        }
-
-    }
-
-    Only public source URLs are included.
-
-    """
-
-    sources = []
-
-    for state, record in state_coalitions.items():
-
-        url = record.get("url", "").strip()
-
-        if not url:
-
-            continue
-
-        sources.append({
-
-            "source_id": f"state_{record.get('abbr', state)}",
-
-            "name": record.get("name", state),
-
-            "category": "State coalition",
-
-            "state": state,
-
-            "url": url,
-
-        })
-
-    for index, source in enumerate(NATIONAL_SOURCES):
-
-        sources.append({
-
-            "source_id": f"national_{index + 1}",
-
-            "name": source["name"],
-
-            "category": source["category"],
-
-            "state": None,
-
-            "url": source["url"],
-
-        })
-
-    return sources
-
-# ============================================================
-
-# URL VALIDATION AND ROBOTS.TXT
-
-# ============================================================
-
-def normalize_hostname(url: str) -> str:
-
-    parsed = urlparse(url)
-
-    if parsed.scheme.lower() != "https":
-
-        raise ValueError("Only HTTPS source URLs are allowed.")
-
-    if not parsed.hostname:
-
-        raise ValueError("Source URL has no hostname.")
-
-    if parsed.username or parsed.password:
-
-        raise ValueError("Credentials in source URLs are not allowed.")
-
-    return parsed.hostname.lower().rstrip(".")
-
-def host_is_allowed(url: str, allowed_host: str) -> bool:
-
-    try:
-
-        host = normalize_hostname(url)
-
     except ValueError:
-
         return False
 
-    allowed_host = allowed_host.lower().rstrip(".")
 
-    return (
+def fingerprint_text(text: str) -> str:
+    normalized = re.sub(r"\s+", " ", text or "").strip().lower()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
-        host == allowed_host
 
-        or host.endswith("." + allowed_host)
+def make_source_id(url: str) -> str:
+    return hashlib.sha256(
+        normalize_url(url).encode("utf-8")
+    ).hexdigest()[:16]
 
-    )
+
+# ---------------------------------------------------------
+# HTML TEXT EXTRACTION
+# ---------------------------------------------------------
+
+class PublicPageTextParser(HTMLParser):
+    """Extract readable page text without executing page content."""
+
+    IGNORED_TAGS = {
+        "script",
+        "style",
+        "noscript",
+        "svg",
+        "iframe",
+        "template",
+        "form",
+    }
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.ignore_depth = 0
+        self.active_ignored_tags = []
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+
+        if tag in self.IGNORED_TAGS:
+            self.ignore_depth += 1
+            self.active_ignored_tags.append(tag)
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+
+        if tag in self.IGNORED_TAGS and tag in self.active_ignored_tags:
+            self.active_ignored_tags.remove(tag)
+            self.ignore_depth = max(0, self.ignore_depth - 1)
+
+    def handle_data(self, data):
+        if self.ignore_depth == 0 and data.strip():
+            self.parts.append(data.strip())
+
+    def get_text(self) -> str:
+        return re.sub(
+            r"\s+",
+            " ",
+            " ".join(self.parts)
+        ).strip()
+
+
+def extract_page_text(html: str) -> str:
+    parser = PublicPageTextParser()
+
+    try:
+        parser.feed(html)
+        parser.close()
+        return parser.get_text()
+    except Exception:
+        logger.exception("HTML extraction failed")
+        return ""
+
+
+# ---------------------------------------------------------
+# ROBOTS.TXT
+# ---------------------------------------------------------
 
 def check_robots_permission(
-
-    session: requests.Session,
-
     url: str,
-
+    session: requests.Session,
 ) -> tuple[bool, str]:
-
     """
+    Check robots.txt for the requested public page.
 
-    Check the source's robots.txt before requesting its homepage.
-
-    A missing robots.txt (404 or 410) is treated as no published
-
-    restriction. Other failures fail closed.
-
+    A robots.txt retrieval error fails closed.
     """
 
     parsed = urlparse(url)
+    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
 
-    robots_url = (
-
-        f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-
-    )
+    parser = RobotFileParser()
+    parser.set_url(robots_url)
 
     try:
-
         response = session.get(
-
             robots_url,
-
+            headers=HEADERS,
             timeout=REQUEST_TIMEOUT,
-
             allow_redirects=False,
-
-            headers={
-
-                "User-Agent": USER_AGENT,
-
-            },
-
         )
 
         if response.status_code in (404, 410):
-
-            return True, "No robots.txt file published."
+            return True, "No robots.txt restriction found."
 
         if response.status_code != 200:
-
-            return (
-
-                False,
-
-                f"Robots check returned HTTP {response.status_code}.",
-
+            return False, (
+                f"Robots policy could not be verified "
+                f"(HTTP {response.status_code})."
             )
-
-        parser = RobotFileParser()
-
-        parser.set_url(robots_url)
 
         parser.parse(response.text.splitlines())
 
-        allowed = parser.can_fetch(
-
-            USER_AGENT,
-
-            url,
-
-        )
+        allowed = parser.can_fetch(USER_AGENT, url)
 
         if not allowed:
-
             return False, "robots.txt disallows this page."
 
         return True, "robots.txt permits this page."
 
-    except requests.RequestException as exc:
+    except requests.RequestException as error:
+        return False, f"Robots check failed: {error}"
 
-        return False, f"Robots check failed: {exc}"
 
-# ============================================================
-
-# PAGE RETRIEVAL
-
-# ============================================================
+# ---------------------------------------------------------
+# SAFE REQUEST HANDLING
+# ---------------------------------------------------------
 
 def fetch_public_page(
-
-    session: requests.Session,
-
-    source: dict,
-
+    url: str,
+    session: Optional[requests.Session] = None,
+    allowed_hosts: Optional[set[str]] = None,
 ) -> dict:
+    """
+    Fetch a public page.
 
-    url = source["url"]
+    Redirects are handled manually. The next destination is validated
+    before another request is made. Redirects to unrelated hosts are
+    rejected.
+    """
 
-    original_host = normalize_hostname(url)
+    session = session or requests.Session()
 
-    allowed, robots_message = check_robots_permission(
+    url = normalize_url(url)
 
-        session,
-
-        url,
-
-    )
-
-    if not allowed:
-
-        raise PermissionError(robots_message)
-
-    response = session.get(
-
-        url,
-
-        timeout=REQUEST_TIMEOUT,
-
-        allow_redirects=True,
-
-        stream=True,
-
-        headers={
-
-            "User-Agent": USER_AGENT,
-
-            "Accept": "text/html,application/xhtml+xml",
-
-        },
-
-    )
-
-    try:
-
-        final_url = response.url
-
-        if not host_is_allowed(final_url, original_host):
-
-            raise PermissionError(
-
-                "Redirect left the registered source domain."
-
-            )
-
-        response.raise_for_status()
-
-        content_type = response.headers.get(
-
-            "Content-Type",
-
-            "",
-
-        ).lower()
-
-        if (
-
-            "text/html" not in content_type
-
-            and "application/xhtml+xml" not in content_type
-
-        ):
-
-            raise ValueError(
-
-                f"Unsupported content type: {content_type}"
-
-            )
-
-        chunks = []
-
-        total_bytes = 0
-
-        for chunk in response.iter_content(
-
-            chunk_size=16384,
-
-        ):
-
-            if not chunk:
-
-                continue
-
-            total_bytes += len(chunk)
-
-            if total_bytes > MAX_RESPONSE_BYTES:
-
-                raise ValueError(
-
-                    "Page exceeded the configured size limit."
-
-                )
-
-            chunks.append(chunk)
-
-        raw_content = b"".join(chunks)
-
-        encoding = response.encoding or "utf-8"
-
-        html = raw_content.decode(
-
-            encoding,
-
-            errors="replace",
-
-        )
-
-        page_text = extract_page_text(html)
-
-        if not page_text:
-
-            raise ValueError(
-
-                "No readable page text was extracted."
-
-            )
-
-        fingerprint = hashlib.sha256(
-
-            page_text.encode("utf-8")
-
-        ).hexdigest()
-
+    if not valid_public_url(url):
         return {
-
-            "final_url": final_url,
-
-            "http_status": response.status_code,
-
-            "content_type": content_type,
-
-            "bytes_received": total_bytes,
-
-            "fingerprint": fingerprint,
-
-            "text_excerpt": page_text[:1500],
-
-            "text_length": len(page_text),
-
-            "robots_result": robots_message,
-
+            "success": False,
+            "error": "Invalid URL.",
         }
 
-    finally:
+    original_host = get_hostname(url)
 
-        response.close()
+    if allowed_hosts is None:
+        allowed_hosts = {original_host}
 
-# ============================================================
-
-# REVIEW QUEUE
-
-# ============================================================
-
-def create_change_record(
-
-    source: dict,
-
-    previous: Optional[dict],
-
-    current: dict,
-
-) -> dict:
-
-    now = datetime.now(timezone.utc).isoformat()
-
-    if previous is None:
-
-        change_type = "new_source"
-
-        old_fingerprint = None
-
-        old_excerpt = None
-
-    else:
-
-        change_type = "content_changed"
-
-        old_fingerprint = previous.get("fingerprint")
-
-        old_excerpt = previous.get("text_excerpt")
-
-    return {
-
-        "change_id": hashlib.sha256(
-
-            (
-
-                source["source_id"]
-
-                + current["fingerprint"]
-
-                + now
-
-            ).encode("utf-8")
-
-        ).hexdigest()[:20],
-
-        "source_id": source["source_id"],
-
-        "source_name": source["name"],
-
-        "category": source["category"],
-
-        "state": source.get("state"),
-
-        "source_url": source["url"],
-
-        "detected_at": now,
-
-        "change_type": change_type,
-
-        "previous_fingerprint": old_fingerprint,
-
-        "current_fingerprint": current["fingerprint"],
-
-        "previous_excerpt": old_excerpt,
-
-        "current_excerpt": current["text_excerpt"],
-
-        "status": "pending_review",
-
-        "reviewed_at": None,
-
-        "reviewer_note": "",
-
+    allowed_hosts = {
+        host.lower().strip()
+        for host in allowed_hosts
+        if host
     }
 
-def add_pending_change(storage, change):
+    if original_host not in allowed_hosts:
+        return {
+            "success": False,
+            "error": "Initial host is not allowlisted.",
+        }
 
-    queue = storage.get_review_queue()
+    current_url = url
 
-    # Do not create duplicate pending records for the same
+    for redirect_number in range(MAX_REDIRECTS + 1):
 
-    # source and current fingerprint.
+        if not valid_public_url(current_url):
+            return {
+                "success": False,
+                "error": "Redirect produced an invalid URL.",
+            }
 
-    for existing in queue:
+        current_host = get_hostname(current_url)
 
-        if (
+        if current_host not in allowed_hosts:
+            return {
+                "success": False,
+                "error": (
+                    "Redirect blocked because its hostname "
+                    "is not allowlisted."
+                ),
+            }
 
-            existing.get("source_id") == change["source_id"]
-
-            and existing.get("current_fingerprint")
-
-            == change["current_fingerprint"]
-
-            and existing.get("status") == "pending_review"
-
-        ):
-
-            return False
-
-    queue.append(change)
-
-    storage.save_review_queue(queue)
-
-    return True
-
-def review_change(
-
-    storage,
-
-    change_id: str,
-
-    decision: str,
-
-    reviewer_note: str = "",
-
-):
-
-    """
-
-    Mark a proposed change approved or rejected.
-
-    Approval does not automatically edit the resource directory.
-
-    A maintainer must separately verify and apply any actual update.
-
-    """
-
-    allowed_decisions = {
-
-        "approved",
-
-        "rejected",
-
-    }
-
-    if decision not in allowed_decisions:
-
-        raise ValueError("Invalid review decision.")
-
-    queue = storage.get_review_queue()
-
-    found = False
-
-    for record in queue:
-
-        if record.get("change_id") == change_id:
-
-            if record.get("status") != "pending_review":
-
-                raise ValueError(
-
-                    "This record has already been reviewed."
-
-                )
-
-            record["status"] = decision
-
-            record["reviewed_at"] = (
-
-                datetime.now(timezone.utc).isoformat()
-
+        try:
+            response = session.get(
+                current_url,
+                headers=HEADERS,
+                timeout=REQUEST_TIMEOUT,
+                stream=True,
+                allow_redirects=False,
             )
 
-            record["reviewer_note"] = reviewer_note
+        except requests.RequestException as error:
+            return {
+                "success": False,
+                "error": str(error),
+            }
 
-            found = True
+        if response.is_redirect or response.is_permanent_redirect:
+            location = response.headers.get("Location")
+            response.close()
 
-            break
+            if not location:
+                return {
+                    "success": False,
+                    "error": "Redirect did not provide a destination.",
+                }
 
-    if not found:
+            if redirect_number >= MAX_REDIRECTS:
+                return {
+                    "success": False,
+                    "error": "Maximum redirects exceeded.",
+                }
 
-        raise KeyError("Review record not found.")
+            next_url = urljoin(current_url, location)
 
-    storage.save_review_queue(queue)
+            if not valid_public_url(next_url):
+                return {
+                    "success": False,
+                    "error": "Redirect destination is invalid.",
+                }
 
-    storage.add_activity({
+            if get_hostname(next_url) not in allowed_hosts:
+                return {
+                    "success": False,
+                    "error": (
+                        "Cross-host redirect blocked. "
+                        "Add the destination host to the approved "
+                        "source registry before following it."
+                    ),
+                }
 
-        "event": "review_completed",
+            current_url = next_url
+            continue
 
-        "change_id": change_id,
+        if response.status_code != 200:
+            status = response.status_code
+            response.close()
 
-        "decision": decision,
+            return {
+                "success": False,
+                "error": f"HTTP {status}",
+            }
 
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        content_type = response.headers.get("Content-Type", "").lower()
 
-    })
+        if "text/html" not in content_type and "application/xhtml+xml" not in content_type:
+            response.close()
 
-    return True
+            return {
+                "success": False,
+                "error": "The resource is not an HTML page.",
+            }
 
-# ============================================================
+        content_length = response.headers.get("Content-Length")
 
-# CRAWL ENGINE
+        if content_length:
+            try:
+                if int(content_length) > MAX_PAGE_BYTES:
+                    response.close()
 
-# ============================================================
+                    return {
+                        "success": False,
+                        "error": "Page exceeds maximum allowed size.",
+                    }
+            except ValueError:
+                pass
 
-def run_crawl(
+        chunks = []
+        total_bytes = 0
 
-    state_coalitions: dict,
+        try:
+            for chunk in response.iter_content(chunk_size=16384):
+                if not chunk:
+                    continue
 
-    storage_dir=DEFAULT_STORAGE,
+                total_bytes += len(chunk)
 
-    delay_seconds=REQUEST_DELAY_SECONDS,
+                if total_bytes > MAX_PAGE_BYTES:
+                    response.close()
 
-    selected_source_ids: Optional[list[str]] = None,
+                    return {
+                        "success": False,
+                        "error": "Page exceeded maximum allowed size.",
+                    }
 
-) -> dict:
+                chunks.append(chunk)
 
+        except requests.RequestException as error:
+            response.close()
+
+            return {
+                "success": False,
+                "error": str(error),
+            }
+
+        encoding = response.encoding or "utf-8"
+        response.close()
+
+        try:
+            html = b"".join(chunks).decode(
+                encoding,
+                errors="replace",
+            )
+        except LookupError:
+            html = b"".join(chunks).decode(
+                "utf-8",
+                errors="replace",
+            )
+
+        return {
+            "success": True,
+            "url": current_url,
+            "status_code": 200,
+            "html": html,
+            "text": extract_page_text(html),
+            "bytes_received": total_bytes,
+            "fetched_at": utc_now(),
+        }
+
+    return {
+        "success": False,
+        "error": "Redirect processing failed.",
+    }
+
+
+# ---------------------------------------------------------
+# SOURCE REGISTRY
+# ---------------------------------------------------------
+
+NATIONAL_SOURCES = [
+    {
+        "name": "National Network to End Domestic Violence",
+        "category": "National Coalition",
+        "url": "https://nnedv.org/",
+    },
+    {
+        "name": "Legal Services Corporation",
+        "category": "Legal Assistance",
+        "url": "https://www.lsc.gov/",
+    },
+    {
+        "name": "U.S. Department of Housing and Urban Development",
+        "category": "Housing Assistance",
+        "url": "https://www.hud.gov/",
+    },
+    {
+        "name": "U.S. Department of Justice",
+        "category": "Government Survivor Resources",
+        "url": "https://www.justice.gov/ovw",
+    },
+    {
+        "name": "211",
+        "category": "Community Resources",
+        "url": "https://www.211.org/",
+    },
+    {
+        "name": "Findhelp",
+        "category": "Community Resource Directory",
+        "url": "https://www.findhelp.org/",
+    },
+]
+
+
+def build_source_registry(
+    state_coalitions: Optional[dict] = None,
+    include_national: bool = True,
+) -> list:
+    """
+    Convert the state directory and national sources into a crawler
+    registry.
+
+    Expected state format:
+        {
+            "WV": {
+                "name": "West Virginia",
+                "abbr": "WV",
+                "url": "https://example.org"
+            }
+        }
     """
 
-    Run one independent public-resource crawl.
+    registry = []
 
-    The caller supplies the existing state directory.
+    if state_coalitions:
+        for abbreviation, record in state_coalitions.items():
 
-    No survivor records or private user data are accepted.
+            if not isinstance(record, dict):
+                continue
 
-    """
+            url = normalize_url(record.get("url", ""))
 
-    storage = CrawlerStorage(storage_dir)
+            if not valid_public_url(url):
+                continue
 
-    sources = build_source_registry(
+            registry.append({
+                "source_id": make_source_id(url),
+                "name": record.get(
+                    "name",
+                    abbreviation,
+                ),
+                "category": "State Coalition",
+                "state": abbreviation,
+                "url": url,
+            })
 
-        state_coalitions
+    if include_national:
+        for source in NATIONAL_SOURCES:
+            registry.append({
+                **source,
+                "source_id": make_source_id(source["url"]),
+                "state": None,
+            })
 
+    # Avoid duplicate URLs.
+    unique = {}
+
+    for source in registry:
+        unique[normalize_url(source["url"])] = source
+
+    return list(unique.values())
+
+
+# ---------------------------------------------------------
+# CHANGE DETECTION
+# ---------------------------------------------------------
+
+def create_change_record(
+    source: dict,
+    previous: Optional[dict],
+    current: dict,
+) -> Optional[dict]:
+    """Create a review record when a source is new or has changed."""
+
+    current_hash = fingerprint_text(current.get("text", ""))
+
+    if previous and previous.get("fingerprint") == current_hash:
+        return None
+
+    previous_hash = (
+        previous.get("fingerprint")
+        if previous
+        else None
     )
 
-    if selected_source_ids is not None:
+    change_type = "updated_source" if previous else "new_source"
 
-        selected = set(selected_source_ids)
+    old_excerpt = (
+        previous.get("excerpt", "")
+        if previous
+        else ""
+    )
 
-        sources = [
+    new_excerpt = current.get("text", "")[:1500]
 
-            source
+    review_id = hashlib.sha256(
+        (
+            source["source_id"]
+            + current_hash
+            + current.get("fetched_at", "")
+        ).encode("utf-8")
+    ).hexdigest()[:20]
 
-            for source in sources
+    return {
+        "review_id": review_id,
+        "source_id": source["source_id"],
+        "source_name": source["name"],
+        "category": source["category"],
+        "state": source.get("state"),
+        "url": source["url"],
+        "change_type": change_type,
+        "previous_fingerprint": previous_hash,
+        "new_fingerprint": current_hash,
+        "previous_excerpt": old_excerpt,
+        "new_excerpt": new_excerpt,
+        "detected_at": utc_now(),
+        "status": "pending",
+        "reviewer_note": "",
+    }
 
-            if source["source_id"] in selected
 
-        ]
+# ---------------------------------------------------------
+# CRAWLER EXECUTION
+# ---------------------------------------------------------
+
+def run_crawl(
+    state_coalitions: Optional[dict] = None,
+    include_national: bool = True,
+    storage_dir: str = "resource_crawler_data",
+    max_sources: Optional[int] = None,
+) -> dict:
+    """
+    Run one public-source check.
+
+    This checks only registered public URLs. It does not crawl
+    survivor-submitted content or private user records.
+    """
+
+    storage = CrawlerStorage(Path(storage_dir))
+
+    registry = build_source_registry(
+        state_coalitions=state_coalitions,
+        include_national=include_national,
+    )
+
+    if max_sources is not None:
+        registry = registry[:max(0, int(max_sources))]
 
     snapshots = storage.get_snapshots()
+    reviews = storage.get_reviews()
 
     session = requests.Session()
 
-    session.headers.update({
-
-        "User-Agent": USER_AGENT,
-
-    })
+    checked = 0
+    changed = 0
+    failed = 0
+    skipped = 0
 
     results = []
 
-    run_id = hashlib.sha256(
+    for source in registry:
+        url = source["url"]
+        source_id = source["source_id"]
 
-        datetime.now(timezone.utc).isoformat().encode("utf-8")
+        allowed, robots_message = check_robots_permission(
+            url,
+            session,
+        )
 
-    ).hexdigest()[:16]
-
-    started_at = datetime.now(timezone.utc).isoformat()
-
-    try:
-
-        for index, source in enumerate(sources):
-
-            if index > 0:
-
-                time.sleep(max(0, float(delay_seconds)))
-
-            source_id = source["source_id"]
+        if not allowed:
+            skipped += 1
 
             result = {
-
-                "source_id": source_id,
-
-                "source_name": source["name"],
-
-                "source_url": source["url"],
-
-                "state": source.get("state"),
-
-                "status": "not_checked",
-
-                "message": "",
-
+                "source": source["name"],
+                "url": url,
+                "status": "skipped",
+                "message": robots_message,
             }
-
-            try:
-
-                page = fetch_public_page(
-
-                    session,
-
-                    source,
-
-                )
-
-                previous = snapshots.get(source_id)
-
-                snapshot = {
-
-                    "source_id": source_id,
-
-                    "source_name": source["name"],
-
-                    "category": source["category"],
-
-                    "state": source.get("state"),
-
-                    "source_url": source["url"],
-
-                    "final_url": page["final_url"],
-
-                    "checked_at": (
-
-                        datetime.now(timezone.utc).isoformat()
-
-                    ),
-
-                    "fingerprint": page["fingerprint"],
-
-                    "text_excerpt": page["text_excerpt"],
-
-                    "text_length": page["text_length"],
-
-                    "http_status": page["http_status"],
-
-                    "bytes_received": page["bytes_received"],
-
-                }
-
-                if previous is None:
-
-                    change = create_change_record(
-
-                        source,
-
-                        None,
-
-                        snapshot,
-
-                    )
-
-                    added = add_pending_change(
-
-                        storage,
-
-                        change,
-
-                    )
-
-                    result["status"] = "new_source"
-
-                    result["message"] = (
-
-                        "First snapshot recorded. "
-
-                        "Initial review item created."
-
-                        if added
-
-                        else "Initial snapshot already has a review item."
-
-                    )
-
-                elif (
-
-                    previous.get("fingerprint")
-
-                    != page["fingerprint"]
-
-                ):
-
-                    change = create_change_record(
-
-                        source,
-
-                        previous,
-
-                        snapshot,
-
-                    )
-
-                    added = add_pending_change(
-
-                        storage,
-
-                        change,
-
-                    )
-
-                    result["status"] = "changed"
-
-                    result["message"] = (
-
-                        "Page content changed. "
-
-                        "Review item created."
-
-                        if added
-
-                        else "A matching pending review already exists."
-
-                    )
-
-                else:
-
-                    result["status"] = "unchanged"
-
-                    result["message"] = (
-
-                        "No text-content change detected."
-
-                    )
-
-                # Store the newest observation separately from
-
-                # the human approval state.
-
-                snapshots[source_id] = snapshot
-
-                result["fingerprint"] = page["fingerprint"]
-
-                result["checked_at"] = snapshot["checked_at"]
-
-            except Exception as exc:
-
-                LOGGER.warning(
-
-                    "Source check failed for %s: %s",
-
-                    source_id,
-
-                    exc,
-
-                )
-
-                result["status"] = "error"
-
-                result["message"] = str(exc)
 
             results.append(result)
 
-            storage.add_activity({
-
-                "event": "source_checked",
-
-                "run_id": run_id,
-
-                "source_id": source_id,
-
-                "status": result["status"],
-
-                "timestamp": (
-
-                    datetime.now(timezone.utc).isoformat()
-
-                ),
-
-            })
-
-    finally:
-
-        session.close()
-
-    storage.save_snapshots(snapshots)
-
-    finished_at = datetime.now(timezone.utc).isoformat()
-
-    summary = {
-
-        "run_id": run_id,
-
-        "crawler_version": CRAWLER_VERSION,
-
-        "started_at": started_at,
-
-        "finished_at": finished_at,
-
-        "sources_attempted": len(results),
-
-        "successful": sum(
-
-            1 for item in results
-
-            if item["status"] in (
-
-                "new_source",
-
-                "changed",
-
-                "unchanged",
-
+            storage.log_activity(
+                "source_skipped",
+                result,
             )
 
-        ),
+            continue
 
-        "changed": sum(
+        fetched = fetch_public_page(
+            url,
+            session=session,
+            allowed_hosts={get_hostname(url)},
+        )
 
-            1 for item in results
+        if not fetched.get("success"):
+            failed += 1
 
-            if item["status"] == "changed"
+            result = {
+                "source": source["name"],
+                "url": url,
+                "status": "failed",
+                "message": fetched.get("error", "Unknown error"),
+            }
 
-        ),
+            results.append(result)
 
-        "new_sources": sum(
-
-            1 for item in results
-
-            if item["status"] == "new_source"
-
-        ),
-
-        "errors": sum(
-
-            1 for item in results
-
-            if item["status"] == "error"
-
-        ),
-
-        "results": results,
-
-    }
-
-    storage.add_activity({
-
-        "event": "crawl_completed",
-
-        "run_id": run_id,
-
-        "summary": {
-
-            key: summary[key]
-
-            for key in (
-
-                "sources_attempted",
-
-                "successful",
-
-                "changed",
-
-                "new_sources",
-
-                "errors",
-
+            storage.log_activity(
+                "source_fetch_failed",
+                result,
             )
 
-        },
-
-        "timestamp": finished_at,
-
-    })
-
-    return summary
-
-# ============================================================
-
-# REVIEW AND STATUS HELPERS
-
-# ============================================================
-
-def get_pending_reviews(
-
-    storage_dir=DEFAULT_STORAGE,
-
-) -> list[dict]:
-
-    storage = CrawlerStorage(storage_dir)
-
-    return [
-
-        item
-
-        for item in storage.get_review_queue()
-
-        if item.get("status") == "pending_review"
-
-    ]
-
-def get_all_reviews(
-
-    storage_dir=DEFAULT_STORAGE,
-
-) -> list[dict]:
-
-    storage = CrawlerStorage(storage_dir)
-
-    return storage.get_review_queue()
-
-def get_crawler_status(
-
-    storage_dir=DEFAULT_STORAGE,
-
-) -> dict:
-
-    storage = CrawlerStorage(storage_dir)
-
-    snapshots = storage.get_snapshots()
-
-    queue = storage.get_review_queue()
-
-    activity = storage.get_activity()
-
-    return {
-
-        "crawler_version": CRAWLER_VERSION,
-
-        "sources_with_snapshots": len(snapshots),
-
-        "pending_reviews": sum(
-
-            1 for item in queue
-
-            if item.get("status") == "pending_review"
-
-        ),
-
-        "approved_reviews": sum(
-
-            1 for item in queue
-
-            if item.get("status") == "approved"
-
-        ),
-
-        "rejected_reviews": sum(
-
-            1 for item in queue
-
-            if item.get("status") == "rejected"
-
-        ),
-
-        "last_activity": (
-
-            activity[-1] if activity else None
-
-        ),
-
-    }
-
-def export_review_queue(
-
-    storage_dir=DEFAULT_STORAGE,
-
-) -> dict:
-
-    return {
-
-        "application": "Survivors Network",
-
-        "crawler_version": CRAWLER_VERSION,
-
-        "exported_at": datetime.now(
-
-            timezone.utc
-
-        ).isoformat(),
-
-        "records": get_all_reviews(storage_dir),
-
-    }
-
-# ============================================================
-
-# COMMAND-LINE SELF TEST
-
-# ============================================================
-
-def self_test():
-
-    """
-
-    Test local storage, text extraction, fingerprinting,
-
-    and review-state transitions without contacting websites.
-
-    """
-
-    import tempfile
-
-    test_html = """
-
-    <html>
-
-      <head><title>Test</title></head>
-
-      <body>
-
-        <h1>Public Resource Directory</h1>
-
-        <p>Contact information updated.</p>
-
-        <script>private_script_data()</script>
-
-      </body>
-
-    </html>
-
-    """
-
-    extracted = extract_page_text(test_html)
-
-    assert "Public Resource Directory" in extracted
-
-    assert "private_script_data" not in extracted
-
-    fingerprint = hashlib.sha256(
-
-        extracted.encode("utf-8")
-
-    ).hexdigest()
-
-    assert len(fingerprint) == 64
-
-    with tempfile.TemporaryDirectory() as temporary:
-
-        storage = CrawlerStorage(temporary)
-
-        change = {
-
-            "change_id": "test123",
-
-            "source_id": "test_source",
-
-            "current_fingerprint": fingerprint,
-
-            "status": "pending_review",
-
+            time.sleep(REQUEST_DELAY_SECONDS)
+            continue
+
+        checked += 1
+
+        current_hash = fingerprint_text(fetched["text"])
+
+        current_snapshot = {
+            "source_id": source_id,
+            "name": source["name"],
+            "category": source["category"],
+            "state": source.get("state"),
+            "url": url,
+            "resolved_url": fetched["url"],
+            "fingerprint": current_hash,
+            "excerpt": fetched["text"][:1500],
+            "fetched_at": fetched["fetched_at"],
+            "bytes_received": fetched["bytes_received"],
         }
 
-        storage.save_review_queue([change])
+        previous_snapshot = snapshots.get(source_id)
 
-        review_change(
-
-            storage,
-
-            "test123",
-
-            "approved",
-
-            "Local self-test approval.",
-
+        change_record = create_change_record(
+            source,
+            previous_snapshot,
+            fetched,
         )
 
-        records = storage.get_review_queue()
+        if change_record:
+            existing_ids = {
+                item.get("review_id")
+                for item in reviews
+            }
 
-        assert records[0]["status"] == "approved"
+            if change_record["review_id"] not in existing_ids:
+                reviews.append(change_record)
+                changed += 1
 
-    print("Survivors Network crawler self-test passed.")
+        # Keep the latest snapshot even if the detected change
+        # is waiting for human review. The review record remains
+        # available until approved or rejected.
+        snapshots[source_id] = current_snapshot
+
+        results.append({
+            "source": source["name"],
+            "url": url,
+            "status": "checked",
+            "changed": bool(change_record),
+            "fetched_at": fetched["fetched_at"],
+        })
+
+        storage.log_activity(
+            "source_checked",
+            {
+                "source": source["name"],
+                "url": url,
+                "changed": bool(change_record),
+            },
+        )
+
+        time.sleep(REQUEST_DELAY_SECONDS)
+
+    storage.save_snapshots(snapshots)
+    storage.save_reviews(reviews)
+
+    report = {
+        "run_at": utc_now(),
+        "total_sources": len(registry),
+        "checked": checked,
+        "changed": changed,
+        "failed": failed,
+        "skipped": skipped,
+        "pending_reviews": len([
+            item for item in reviews
+            if item.get("status") == "pending"
+        ]),
+        "results": results,
+    }
+
+    storage.log_activity(
+        "crawl_completed",
+        {
+            "checked": checked,
+            "changed": changed,
+            "failed": failed,
+            "skipped": skipped,
+        },
+    )
+
+    return report
+
+
+# ---------------------------------------------------------
+# REVIEW QUEUE
+# ---------------------------------------------------------
+
+def get_pending_reviews(
+    storage_dir: str = "resource_crawler_data",
+) -> list:
+    storage = CrawlerStorage(Path(storage_dir))
+
+    return [
+        item for item in storage.get_reviews()
+        if item.get("status") == "pending"
+    ]
+
+
+def get_all_reviews(
+    storage_dir: str = "resource_crawler_data",
+) -> list:
+    storage = CrawlerStorage(Path(storage_dir))
+    return storage.get_reviews()
+
+
+def review_change(
+    review_id: str,
+    decision: str,
+    reviewer_note: str = "",
+    storage_dir: str = "resource_crawler_data",
+) -> dict:
+    """
+    Approve or reject a detected change.
+
+    Approval records the human decision. It does not automatically
+    modify STATE_COALITIONS or any other resource directory.
+    """
+
+    decision = (decision or "").strip().lower()
+
+    if decision not in ("approve", "reject"):
+        return {
+            "success": False,
+            "message": "Decision must be approve or reject.",
+        }
+
+    storage = CrawlerStorage(Path(storage_dir))
+    reviews = storage.get_reviews()
+
+    for item in reviews:
+        if item.get("review_id") == review_id:
+
+            if item.get("status") != "pending":
+                return {
+                    "success": False,
+                    "message": "This item has already been reviewed.",
+                }
+
+            item["status"] = (
+                "approved"
+                if decision == "approve"
+                else "rejected"
+            )
+
+            item["reviewed_at"] = utc_now()
+            item["reviewer_note"] = reviewer_note
+
+            if not storage.save_reviews(reviews):
+                return {
+                    "success": False,
+                    "message": "Could not save review decision.",
+                }
+
+            storage.log_activity(
+                "review_decision",
+                {
+                    "review_id": review_id,
+                    "decision": decision,
+                },
+            )
+
+            return {
+                "success": True,
+                "message": f"Change {decision}d.",
+                "review_id": review_id,
+                "status": item["status"],
+            }
+
+    return {
+        "success": False,
+        "message": "Review record not found.",
+    }
+
+
+def export_review_queue(
+    storage_dir: str = "resource_crawler_data",
+) -> dict:
+    storage = CrawlerStorage(Path(storage_dir))
+
+    return {
+        "exported_at": utc_now(),
+        "reviews": storage.get_reviews(),
+    }
+
+
+# ---------------------------------------------------------
+# STATUS AND DIAGNOSTICS
+# ---------------------------------------------------------
+
+def get_crawler_status(
+    storage_dir: str = "resource_crawler_data",
+) -> dict:
+    storage = CrawlerStorage(Path(storage_dir))
+
+    snapshots = storage.get_snapshots()
+    reviews = storage.get_reviews()
+    activity = storage.get_activity()
+
+    pending = [
+        item for item in reviews
+        if item.get("status") == "pending"
+    ]
+
+    approved = [
+        item for item in reviews
+        if item.get("status") == "approved"
+    ]
+
+    rejected = [
+        item for item in reviews
+        if item.get("status") == "rejected"
+    ]
+
+    return {
+        "storage_directory": str(storage.directory),
+        "snapshot_count": len(snapshots),
+        "review_count": len(reviews),
+        "pending_reviews": len(pending),
+        "approved_reviews": len(approved),
+        "rejected_reviews": len(rejected),
+        "activity_entries": len(activity),
+        "last_activity": (
+            activity[-1]
+            if activity
+            else None
+        ),
+    }
+
+
+# ---------------------------------------------------------
+# OFFLINE SELF-TEST
+# ---------------------------------------------------------
+
+def self_test() -> dict:
+    """
+    Offline tests for parsing, fingerprinting, source IDs,
+    storage, and review-state logic.
+
+    No network requests are made.
+    """
+
+    test_results = {}
+
+    try:
+        sample_html = """
+        <html>
+          <head><title>Test</title></head>
+          <body>
+            <h1>Survivor Support</h1>
+            <p>Legal assistance and housing resources.</p>
+            <script>private_script_data()</script>
+          </body>
+        </html>
+        """
+
+        extracted = extract_page_text(sample_html)
+
+        test_results["html_extraction"] = (
+            "Survivor Support" in extracted
+            and "private_script_data" not in extracted
+        )
+
+        test_results["fingerprint"] = (
+            fingerprint_text("Resource Page")
+            == fingerprint_text(" resource   page ")
+        )
+
+        test_results["source_id"] = (
+            len(make_source_id("https://example.org")) == 16
+        )
+
+        test_results["url_validation"] = (
+            valid_public_url("https://example.org")
+            and not valid_public_url("file:///etc/passwd")
+        )
+
+        test_results["redirect_host_validation"] = (
+            get_hostname("https://example.org/path")
+            != get_hostname("https://unrelated.example/path")
+        )
+
+        test_dir = Path("resource_crawler_self_test")
+        storage = CrawlerStorage(test_dir)
+
+        sample_data = {
+            "test": {
+                "fingerprint": fingerprint_text("sample"),
+            }
+        }
+
+        write_ok = storage.save_snapshots(sample_data)
+        read_back = storage.get_snapshots()
+
+        test_results["local_storage"] = (
+            write_ok and read_back == sample_data
+        )
+
+        source = {
+            "source_id": "test-source",
+            "name": "Test Source",
+            "category": "Test",
+            "url": "https://example.org",
+            "state": None,
+        }
+
+        current = {
+            "text": "A new public resource page.",
+            "fetched_at": utc_now(),
+        }
+
+        record = create_change_record(
+            source,
+            None,
+            current,
+        )
+
+        test_results["new_source_review"] = (
+            record is not None
+            and record["status"] == "pending"
+        )
+
+        # Clean up test artifacts.
+        for path in test_dir.glob("*"):
+            path.unlink(missing_ok=True)
+
+        test_dir.rmdir()
+
+    except Exception as error:
+        logger.exception("Crawler self-test failed")
+        test_results["unexpected_error"] = str(error)
+
+    return {
+        "passed": all(
+            value is True
+            for value in test_results.values()
+        ),
+        "tests": test_results,
+    }
+
+
+# ---------------------------------------------------------
+# COMMAND-LINE ENTRY POINT
+# ---------------------------------------------------------
 
 if __name__ == "__main__":
-
-    import argparse
-
-    parser = argparse.ArgumentParser(
-
-        description="Survivors Network resource crawler"
-
-    )
-
-    parser.add_argument(
-
-        "--self-test",
-
-        action="store_true",
-
-        help="Run offline tests without contacting websites.",
-
-    )
-
-    args = parser.parse_args()
-
-    if args.self_test:
-
-        self_test()
-
-    else:
-
-        print(
-
-            "This module is called by survivors-network.py. "
-
-            "Use --self-test for an offline test."
-
-        )
+    print(json.dumps(self_test(), indent=2))
