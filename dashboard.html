@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<meta name="theme-color" content="#edf3f0">
+
+<title>Survivors Network</title>
+
+<style>
+
+:root {
+    --background: #f5f7f6;
+    --surface: #ffffff;
+    --text: #29423e;
+    --muted: #647875;
+    --border: #e0e9e5;
+    --accent: #52766e;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: system-ui, sans-serif;
+    background: var(--background);
+    color: var(--text);
+    line-height: 1.65;
+}
+
+header {
+    padding: 65px 24px 45px;
+    text-align: center;
+}
+
+header h1 {
+    font-size: clamp(2.2rem, 6vw, 3.5rem);
+    margin-bottom: 12px;
+}
+
+header p {
+    max-width: 650px;
+    margin: auto;
+    color: var(--muted);
+}
+
+main {
+    width: min(900px, 92%);
+    margin: auto;
+}
+
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    padding: 25px;
+    margin-bottom: 20px;
+}
+
+.card h2 {
+    margin-top: 0;
+}
+
+a {
+    color: var(--accent);
+    font-weight: 650;
+}
+
+.notice {
+    background: #edf3f0;
+    border-left: 4px solid var(--accent);
+    padding: 15px;
+    border-radius: 8px;
+}
+
+footer {
+    text-align: center;
+    padding: 35px;
+    color: var(--muted);
+    font-size: 0.9rem;
+}
+
+</style>
+</head>
+
+<body>
+
+<header>
+
+<h1>Survivors Network</h1>
+
+<p>
+A survivor-controlled project for private information,
+independent access, and practical support resources.
+</p>
+
+</header>
+
+<main>
+
+<section class="card">
+
+<h2>Welcome</h2>
+
+<p>
+Survivors Network is being developed around individual
+control of personal information. Its goal is to provide
+a comfortable and accessible environment for organizing
+information and finding useful resources.
+</p>
+
+</section>
+
+<section class="card">
+
+<h2>Local control</h2>
+
+<p>
+The local application is designed to run on an individual's
+own computer. Private records are not intended to be stored
+in a centralized public database.
+</p>
+
+<p>
+GitHub provides the software and documentation.
+It is not the private records repository.
+</p>
+
+</section>
+
+<section class="card">
+
+<h2>Get the application</h2>
+
+<p>
+Download the project source and follow the installation
+instructions in the README.
+</p>
+
+<a href="https://github.com/mamaofthree579-ship-it">
+Visit GitHub
+</a>
+
+</section>
+
+<section class="card">
+
+<h2>Privacy and safety</h2>
+
+<div class="notice">
+
+Local encryption is one layer of protection.
+It cannot guarantee protection against a compromised
+computer, monitoring software, or access to an unlocked
+device.
+
+</div>
+
+</section>
+
+<section class="card">
+
+<h2>Project development</h2>
+
+<p>
+The project is designed as a modular system. Future
+development includes independently operated components,
+peer communication, resource verification, and controlled
+information synchronization.
+</p>
+
+</section>
+
+</main>
+
+<footer>
+
+Survivors Network · Independent project
+
+</footer>
+
+</body>
+</html>
