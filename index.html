@@ -4,107 +4,211 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-
     <meta name="theme-color" content="#edf3f0">
-    <meta name="description" content="Survivors Network is an independent, survivor-controlled project focused on private information, independent access, and practical support resources.">
-
+    <meta name="description" content="Survivors Network public resource directory and safety information.">
     <title>Survivors Network</title>
-
     <link rel="stylesheet" href="styles.css">
     <script src="app.js" defer></script>
 </head>
-
 <body>
-
 <a class="skip-link" href="#main-content">Skip to content</a>
 
 <header class="site-header">
-    <div class="header-content">
-        <h1>Survivors Network</h1>
-
-        <p>
-            A survivor-controlled project for private information,
-            independent access, and practical support resources.
+    <div class="header-inner">
+        <a class="brand" href="index.html" aria-label="Survivors Network home">
+            <span class="brand-mark" aria-hidden="true">SN</span>
+            <span>Survivors Network</span>
+        </a>
+        <p class="header-description">
+            Independent access to practical support resources.
         </p>
     </div>
 </header>
 
-<main id="main-content">
-
-    <section class="card">
-        <h2>Welcome</h2>
-
-        <p>
-            Survivors Network is being developed around individual
-            control of personal information. Its goal is to provide
-            a comfortable and accessible environment for organizing
-            information and finding useful resources.
-        </p>
-    </section>
-
-    <section class="card">
-        <h2>Local control</h2>
-
-        <p>
-            The local application is designed to run on an individual's
-            own computer. Private records are not intended to be stored
-            in a centralized public database.
-        </p>
-
-        <p>
-            GitHub provides the software and documentation.
-            It is not the private records repository.
-        </p>
-    </section>
-
-    <section class="card">
-        <h2>Get the application</h2>
-
-        <p>
-            Download the project source and follow the installation
-            instructions in the README.
-        </p>
-
-        <a
-            class="github-link"
-            href="https://github.com/mamaofthree579-ship-it/SurvivorsNetwork"
-            target="_blank"
-            rel="noopener noreferrer"
-        >
-            Visit the Survivors Network repository
+<nav class="main-nav" aria-label="Main navigation">
+    <div class="nav-inner">
+        <button class="nav-button active" type="button"
+                data-view="resources" aria-current="page">
+            Find Resources
+        </button>
+        <button class="nav-button" type="button" data-view="safety">
+            Safety Guide
+        </button>
+        <a class="nav-external"
+           href="https://github.com/mamaofthree579-ship-it/SurvivorsNetwork"
+           target="_blank" rel="noopener noreferrer">
+            Project &amp; Source
         </a>
+    </div>
+</nav>
+
+<main id="main-content">
+    <section id="resources-view" class="view active">
+        <div class="intro">
+            <p class="eyebrow">PUBLIC RESOURCE DIRECTORY</p>
+            <h1>Find support resources</h1>
+            <p>
+                Search public resource listings by name, location,
+                service, or category. You can browse without creating
+                an account or entering personal information.
+            </p>
+        </div>
+
+        <section class="search-panel" aria-label="Resource search">
+            <label for="resource-search">Search resources</label>
+            <input id="resource-search" type="search"
+                   placeholder="Try a service, organization, or keyword"
+                   autocomplete="off">
+
+            <div class="filter-grid">
+                <div>
+                    <label for="state-filter">State</label>
+                    <select id="state-filter">
+                        <option value="">All states</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="category-filter">Service category</label>
+                    <select id="category-filter">
+                        <option value="">All categories</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="search-actions">
+                <button id="clear-filters" class="secondary-button"
+                        type="button">Clear filters</button>
+                <span id="result-count" aria-live="polite">Loading directory…</span>
+            </div>
+        </section>
+
+        <section class="directory-section" aria-label="Resource listings">
+            <div id="directory-status" class="status-message" role="status">
+                Loading the public resource directory…
+            </div>
+            <div id="resource-results" class="resource-grid"></div>
+        </section>
+
+        <section class="directory-note">
+            <h2>About these listings</h2>
+            <p>
+                Listings are drawn from the project's public resource
+                directory. Information can change. Contact an organization
+                directly to confirm current services, eligibility,
+                availability, and contact details.
+            </p>
+            <p>
+                A missing phone number or email address does not
+                necessarily mean an organization is unavailable.
+            </p>
+            <p id="directory-updated" class="small-note"></p>
+        </section>
     </section>
 
-    <section class="card">
-        <h2>Privacy and safety</h2>
+    <section id="safety-view" class="view" hidden>
+        <div class="intro">
+            <p class="eyebrow">INFORMATION &amp; SAFETY</p>
+            <h1>Safety Guide</h1>
+            <p>
+                General information for using online resources and
+                digital tools with greater awareness of privacy risks.
+            </p>
+        </div>
+
+        <article class="guide-card">
+            <h2>Your device and privacy</h2>
+            <ul>
+                <li>
+                    If you believe a device may be monitored, use a
+                    device you trust when seeking sensitive information,
+                    if one is safely available.
+                </li>
+                <li>
+                    Be aware that browser history, notifications,
+                    shared accounts, location settings, and saved
+                    passwords may reveal activity.
+                </li>
+                <li>
+                    Private browsing does not make activity invisible
+                    to device administrators, network operators, or
+                    monitoring software.
+                </li>
+                <li>
+                    Consider whether downloaded files, messages, or
+                    printed materials could be seen by someone else.
+                </li>
+            </ul>
+        </article>
+
+        <article class="guide-card">
+            <h2>Using resource listings</h2>
+            <ul>
+                <li>
+                    Confirm an organization's services and eligibility
+                    directly before relying on a listing.
+                </li>
+                <li>
+                    Avoid sharing more personal information than
+                    necessary when contacting an organization.
+                </li>
+                <li>
+                    Ask about confidentiality, recordkeeping, and
+                    communication preferences before providing
+                    sensitive details.
+                </li>
+                <li>
+                    A listing is informational and is not an endorsement
+                    or guarantee of service availability.
+                </li>
+            </ul>
+        </article>
+
+        <article class="guide-card">
+            <h2>Limits of digital protection</h2>
+            <p>
+                Encryption and local storage can reduce certain risks,
+                but they cannot guarantee protection against a
+                compromised device, monitoring software, unsafe
+                backups, or access to an unlocked computer or phone.
+            </p>
+            <p>
+                Survivors Network does not promise that any device,
+                website, communication channel, or storage method
+                is completely secure.
+            </p>
+        </article>
+
+        <article class="guide-card">
+            <h2>Immediate danger</h2>
+            <p>
+                If you are in immediate danger, contact local emergency
+                services when it is safe to do so. If calling is unsafe,
+                consider whether a trusted person or a local support
+                organization can help identify a safer way to reach
+                assistance.
+            </p>
+        </article>
 
         <div class="notice">
-            Local encryption is one layer of protection.
-            It cannot guarantee protection against a compromised
-            computer, monitoring software, or access to an unlocked
-            device.
+            This guide provides general information, not individualized
+            safety planning, legal advice, or emergency response.
+            Your circumstances and safest options may differ.
         </div>
     </section>
-
-    <section class="card">
-        <h2>Project development</h2>
-
-        <p>
-            The project is designed as a modular system. Future
-            development includes independently operated components,
-            peer communication, resource verification, and controlled
-            information synchronization.
-        </p>
-    </section>
-
 </main>
 
 <footer class="site-footer">
+    <p>Survivors Network · Independent project</p>
     <p>
-        Survivors Network · Independent project
-        <span id="current-year"></span>
+        <a href="https://github.com/mamaofthree579-ship-it/SurvivorsNetwork"
+           target="_blank" rel="noopener noreferrer">
+            Project source and documentation
+        </a>
+    </p>
+    <p class="footer-note">
+        Public directory only. Do not submit private survivor information
+        through this website.
     </p>
 </footer>
-
 </body>
 </html>
