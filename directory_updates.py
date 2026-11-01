@@ -3,24 +3,28 @@
 Survivors Network — Automated Directory Intelligence
 =====================================================
 
-Consumes resource_crawler.py data and automatically maintains
-the state resource directory.
+Maintains the PUBLIC state resource directory using information
+collected by resource_crawler.py.
 
 Independent validation bots:
-1. SourceBot          — source identity and authority
+1. SourceBot          — source ingestion and identity
 2. ContactBot         — phone and email extraction
-3. LinkBot            — official website and link validation
+3. LinkBot            — official website redirect validation
 4. ServiceBot         — service-category extraction
 5. FormatBot          — data and contact-format validation
-6. CorroborationBot   — agreement across independent sources
+6. CorroborationBot   — independent-source agreement
 7. ConsistencyBot     — comparison with existing directory records
-8. DecisionBot        — confidence scoring and update decisions
+8. DecisionBot        — deterministic confidence scoring
 
-High-confidence changes are automatically applied to a versioned
-directory copy. Uncertain or conflicting changes are held in an
-automated exception queue.
+Privacy boundary:
+- This module reads public resource crawler data only.
+- It never reads survivor entries, private records, or mailbox data.
+- It never sends survivor information to external websites.
 
-Survivor records and private data are never accessed by this module.
+Storage:
+- state_resource_directory.json lives in the repository root.
+- Supporting JSON files live in resource_crawler_data/.
+- Missing supporting files are initialized without overwriting existing data.
 """
 
 from __future__ import annotations
@@ -42,25 +46,38 @@ from urllib.parse import urlparse
 # CONFIGURATION
 # =========================================================
 
-DATA_DIR = Path("resource_crawler_data")
+ROOT_DIR = Path(__file__).resolve().parent
+
+DATA_DIR = ROOT_DIR / "resource_crawler_data"
 
 SNAPSHOT_FILE = DATA_DIR / "snapshots.json"
 REVIEW_FILE = DATA_DIR / "pending_reviews.json"
+ACTIVITY_FILE = DATA_DIR / "activity_log.json"
 
-DIRECTORY_FILE = DATA_DIR / "state_resource_directory.json"
+# Canonical directory supplied for the application.
+DIRECTORY_FILE = ROOT_DIR / "state_resource_directory.json"
+
+# Legacy fallback location.
+LEGACY_DIRECTORY_FILE = DATA_DIR / "state_resource_directory.json"
+
 HISTORY_FILE = DATA_DIR / "directory_history.json"
 EXCEPTION_FILE = DATA_DIR / "directory_exceptions.json"
 REPORT_FILE = DATA_DIR / "directory_bot_report.json"
 
 AUTO_APPLY_THRESHOLD = 0.82
-CORROBORATION_THRESHOLD = 0.75
+CORROBORATION_THRESHOLD = 1
 
 MAX_HISTORY = 100
 MAX_EXCEPTIONS = 2000
+MAX_ACTIVITY_EVENTS = 5000
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("survivors_network_directory")
 
+
+# =========================================================
+# GENERAL UTILITIES
+# =========================================================
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -73,141 +90,123 @@ def stable_hash(value: Any) -> str:
         ensure_ascii=False,
         default=str,
     )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    return hashlib.sha256(
+        raw.encode("utf-8")
+    ).hexdigest()
 
 
 def read_json(path: Path, default: Any) -> Any:
+    path = Path(path)
+
     if not path.exists():
-        return default
+        return copy.deepcopy(default)
 
     try:
         with path.open("r", encoding="utf-8") as file:
             return json.load(file)
+
     except (OSError, json.JSONDecodeError):
         logger.exception("Could not read %s", path)
-        return default
+        return copy.deepcopy(default)
 
 
 def write_json(path: Path, data: Any) -> bool:
+    """
+    Write JSON through a temporary file.
+
+    Existing files are not replaced unless the new JSON has been
+    completely written.
+    """
+
+    path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
+
+    temporary = path.with_suffix(
+        path.suffix + ".tmp"
+    )
 
     try:
         with temporary.open("w", encoding="utf-8") as file:
             json.dump(
                 data,
                 file,
-                indent=2,
+                indent=4,
                 ensure_ascii=False,
             )
+
+            file.write("\n")
+            file.flush()
 
         temporary.replace(path)
         return True
 
-    except OSError:
+    except (OSError, TypeError, ValueError):
         logger.exception("Could not write %s", path)
-        temporary.unlink(missing_ok=True)
+
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
         return False
 
 
-# =========================================================
-# SOURCE DATA INGESTION
-# =========================================================
-
-class SourceBot:
+def initialize_storage(storage_dir: Path = DATA_DIR) -> dict:
     """
-    Reads existing crawler snapshots and review records.
+    Initialize missing public-directory support files.
 
-    Supports:
-    - extracted_text
-    - text
-    - excerpt
-    - new_excerpt
-
-    The current resource_crawler.py stores excerpts. A later crawler
-    enhancement can provide extracted_text for more complete coverage.
+    Existing files are never overwritten.
     """
 
-    def __init__(self, storage_dir: Path = DATA_DIR):
-        self.storage_dir = Path(storage_dir)
+    storage_dir = Path(storage_dir)
+    storage_dir.mkdir(parents=True, exist_ok=True)
 
-    def load_sources(self) -> list[dict]:
-        snapshots = read_json(
-            self.storage_dir / "snapshots.json",
-            {},
-        )
+    defaults = {
+        "snapshots.json": {},
+        "pending_reviews.json": [],
+        "activity_log.json": [],
+        "directory_history.json": [],
+        "directory_exceptions.json": [],
+        "directory_bot_report.json": {},
+    }
 
-        reviews = read_json(
-            self.storage_dir / "pending_reviews.json",
-            [],
-        )
+    created = []
 
-        sources = []
+    for filename, default in defaults.items():
+        path = storage_dir / filename
 
-        if isinstance(snapshots, dict):
-            for source_id, snapshot in snapshots.items():
-                if not isinstance(snapshot, dict):
-                    continue
+        if not path.exists():
+            if write_json(path, default):
+                created.append(filename)
 
-                text = (
-                    snapshot.get("extracted_text")
-                    or snapshot.get("text")
-                    or snapshot.get("excerpt")
-                    or ""
-                )
-
-                if not text:
-                    continue
-
-                sources.append({
-                    **snapshot,
-                    "source_id": snapshot.get(
-                        "source_id",
-                        source_id,
-                    ),
-                    "source_text": text,
-                    "source_origin": "snapshot",
-                })
-
-        # Use a review excerpt only when there is no snapshot for
-        # the same source. This avoids double-counting the same page.
-        known_ids = {
-            source.get("source_id")
-            for source in sources
-        }
-
-        for review in reviews:
-            if not isinstance(review, dict):
-                continue
-
-            source_id = review.get("source_id")
-
-            if source_id in known_ids:
-                continue
-
-            text = (
-                review.get("extracted_text")
-                or review.get("new_excerpt")
-                or ""
-            )
-
-            if not text:
-                continue
-
-            sources.append({
-                **review,
-                "source_text": text,
-                "source_origin": "review",
-            })
-
-            known_ids.add(source_id)
-
-        return sources
+    return {
+        "success": True,
+        "created": created,
+        "storage_directory": str(storage_dir),
+    }
 
 
-# =========================================================
-# TEXT NORMALIZATION
-# =========================================================
+def resolve_directory_path(
+    storage_dir: Path = DATA_DIR,
+) -> Path:
+    """
+    Prefer the repository-root directory.
+
+    Retain compatibility with an older directory stored inside
+    resource_crawler_data/.
+    """
+
+    if DIRECTORY_FILE.exists():
+        return DIRECTORY_FILE
+
+    legacy = Path(storage_dir) / DIRECTORY_FILE.name
+
+    if legacy.exists():
+        return legacy
+
+    return DIRECTORY_FILE
+
 
 def normalize_text(value: str) -> str:
     return re.sub(
@@ -218,7 +217,7 @@ def normalize_text(value: str) -> str:
 
 
 def normalize_phone(value: str) -> str:
-    digits = re.sub(r"\D", "", value or "")
+    digits = re.sub(r"\D", "", str(value or ""))
 
     if len(digits) == 11 and digits.startswith("1"):
         digits = digits[1:]
@@ -230,21 +229,250 @@ def normalize_phone(value: str) -> str:
 
 
 def normalize_email(value: str) -> str:
-    return (value or "").strip().lower()
+    return str(value or "").strip().lower()
+
+
+def normalize_host(value: str) -> str:
+    try:
+        host = (urlparse(str(value)).hostname or "").lower()
+
+        if host.startswith("www."):
+            host = host[4:]
+
+        return host
+
+    except ValueError:
+        return ""
 
 
 def valid_https_url(value: str) -> bool:
     try:
-        parsed = urlparse(value)
+        parsed = urlparse(str(value))
 
         return (
-            parsed.scheme == "https"
+            parsed.scheme.lower() == "https"
             and bool(parsed.hostname)
             and not parsed.username
             and not parsed.password
         )
+
     except ValueError:
         return False
+
+
+def same_official_host(
+    candidate_url: str,
+    official_url: str,
+) -> bool:
+    candidate_host = normalize_host(candidate_url)
+    official_host = normalize_host(official_url)
+
+    if not candidate_host or not official_host:
+        return False
+
+    return (
+        candidate_host == official_host
+        or candidate_host.endswith("." + official_host)
+    )
+
+
+def unique_candidates(items: list[dict]) -> list[dict]:
+    result = {}
+
+    for item in items:
+        value = item.get("value")
+
+        if value:
+            result[value] = item
+
+    return list(result.values())
+
+
+# =========================================================
+# STORAGE EVENT LOG
+# =========================================================
+
+def record_activity(
+    event: str,
+    details: Optional[dict] = None,
+    storage_dir: Path = DATA_DIR,
+) -> bool:
+    """
+    Records public-directory maintenance events only.
+
+    Never pass survivor-submitted notes, identities, or private
+    incident details to this function.
+    """
+
+    path = Path(storage_dir) / ACTIVITY_FILE.name
+
+    events = read_json(path, [])
+
+    if not isinstance(events, list):
+        events = []
+
+    events.append({
+        "timestamp": utc_now(),
+        "event": event,
+        "details": details or {},
+    })
+
+    events = events[-MAX_ACTIVITY_EVENTS:]
+
+    return write_json(path, events)
+
+
+# =========================================================
+# STATE DIRECTORY HELPERS
+# =========================================================
+
+def build_state_lookup(directory: dict) -> dict:
+    """
+    Supports state names and two-letter state codes.
+    """
+
+    lookup = {}
+
+    for state_name, record in directory.items():
+
+        if not isinstance(record, dict):
+            continue
+
+        lookup[state_name.lower()] = state_name
+
+        code = str(record.get("code", "")).upper()
+
+        if code:
+            lookup[code.lower()] = state_name
+
+    return lookup
+
+
+def resolve_state(
+    state_value: Any,
+    directory: dict,
+) -> Optional[str]:
+
+    lookup = build_state_lookup(directory)
+
+    normalized = normalize_text(
+        str(state_value or "")
+    ).lower()
+
+    return lookup.get(normalized)
+
+
+# =========================================================
+# SOURCE DATA INGESTION
+# =========================================================
+
+class SourceBot:
+    """
+    Reads public resource crawler snapshots and pending reviews.
+
+    Supported text fields:
+    - extracted_text
+    - text
+    - excerpt
+    - new_excerpt
+    """
+
+    def __init__(self, storage_dir: Path = DATA_DIR):
+        self.storage_dir = Path(storage_dir)
+
+    def load_sources(self) -> list[dict]:
+
+        snapshots = read_json(
+            self.storage_dir / SNAPSHOT_FILE.name,
+            {},
+        )
+
+        reviews = read_json(
+            self.storage_dir / REVIEW_FILE.name,
+            [],
+        )
+
+        sources = []
+
+        if isinstance(snapshots, dict):
+            snapshot_items = snapshots.items()
+
+        elif isinstance(snapshots, list):
+            snapshot_items = enumerate(snapshots)
+
+        else:
+            snapshot_items = []
+
+        for source_id, snapshot in snapshot_items:
+
+            if not isinstance(snapshot, dict):
+                continue
+
+            text = (
+                snapshot.get("extracted_text")
+                or snapshot.get("text")
+                or snapshot.get("excerpt")
+                or snapshot.get("new_excerpt")
+                or ""
+            )
+
+            if not text:
+                continue
+
+            sources.append({
+                **snapshot,
+                "source_id": snapshot.get(
+                    "source_id",
+                    str(source_id),
+                ),
+                "source_text": text,
+                "source_origin": "snapshot",
+            })
+
+        if isinstance(reviews, dict):
+            review_items = list(reviews.values())
+
+        elif isinstance(reviews, list):
+            review_items = reviews
+
+        else:
+            review_items = []
+
+        known_ids = {
+            str(source.get("source_id"))
+            for source in sources
+        }
+
+        for review in review_items:
+
+            if not isinstance(review, dict):
+                continue
+
+            source_id = review.get("source_id")
+
+            if source_id and str(source_id) in known_ids:
+                continue
+
+            text = (
+                review.get("extracted_text")
+                or review.get("new_excerpt")
+                or review.get("excerpt")
+                or ""
+            )
+
+            if not text:
+                continue
+
+            sources.append({
+                **review,
+                "source_id": source_id or stable_hash(review)[:20],
+                "source_text": text,
+                "source_origin": "review",
+            })
+
+            known_ids.add(str(source_id))
+
+        return sources
 
 
 # =========================================================
@@ -253,9 +481,9 @@ def valid_https_url(value: str) -> bool:
 
 class ContactBot:
     """
-    Extracts public contact information from official resource pages.
+    Extracts public phone numbers and email addresses.
 
-    Context is required for telephone numbers to reduce false matches.
+    Telephone numbers require nearby contact-related context.
     """
 
     PHONE_PATTERN = re.compile(
@@ -289,12 +517,14 @@ class ContactBot:
     )
 
     def extract(self, text: str) -> dict:
+
         text = normalize_text(text)
 
         phones = []
         emails = []
 
         for match in self.PHONE_PATTERN.finditer(text):
+
             raw = match.group(0)
             normalized = normalize_phone(raw)
 
@@ -303,6 +533,7 @@ class ContactBot:
 
             start = max(0, match.start() - 90)
             end = min(len(text), match.end() + 90)
+
             context = text[start:end]
 
             contextual = bool(
@@ -318,6 +549,7 @@ class ContactBot:
                 })
 
         for match in self.EMAIL_PATTERN.finditer(text):
+
             raw = match.group(0)
             normalized = normalize_email(raw)
 
@@ -341,6 +573,7 @@ class ContactBot:
 
             start = max(0, match.start() - 90)
             end = min(len(text), match.end() + 90)
+
             context = text[start:end]
 
             emails.append({
@@ -358,20 +591,19 @@ class ContactBot:
         }
 
 
-def unique_candidates(items: list[dict]) -> list[dict]:
-    result = {}
-    for item in items:
-        result[item["value"]] = item
-    return list(result.values())
-
-
 # =========================================================
 # LINK VALIDATION BOT
 # =========================================================
 
 class LinkBot:
+    """
+    Accepts only same-host HTTPS redirects.
+
+    Cross-domain redirects are never automatically adopted.
+    """
 
     def extract(self, source: dict) -> Optional[dict]:
+
         original_url = source.get("url", "")
         resolved_url = source.get("resolved_url", "")
 
@@ -384,28 +616,22 @@ class LinkBot:
         if not valid_https_url(resolved_url):
             return None
 
-        original_host = (
-            urlparse(original_url).hostname or ""
-        ).lower()
-
-        resolved_host = (
-            urlparse(resolved_url).hostname or ""
-        ).lower()
-
-        # A crawler redirect to another domain is not accepted
-        # as an automatic official-domain replacement.
-        if original_host != resolved_host:
+        if not same_official_host(
+            resolved_url,
+            original_url,
+        ):
             return None
 
         if original_url.rstrip("/") == resolved_url.rstrip("/"):
             return None
 
         return {
-            "field": "url",
+            "field": "website",
             "value": resolved_url,
             "source_id": source.get("source_id"),
-            "authority": True,
-            "reason": "Same-host HTTPS redirect verified by crawler.",
+            "source_authority": True,
+            "contextual": True,
+            "reason": "Same-host HTTPS redirect.",
         }
 
 
@@ -465,10 +691,13 @@ class ServiceBot:
     }
 
     def extract(self, text: str) -> list[str]:
+
         lowered = normalize_text(text).lower()
+
         services = []
 
         for category, terms in self.SERVICE_TERMS.items():
+
             if any(term in lowered for term in terms):
                 services.append(category)
 
@@ -480,6 +709,10 @@ class ServiceBot:
 # =========================================================
 
 class FormatBot:
+
+    VALID_SERVICES = set(
+        ServiceBot.SERVICE_TERMS.keys()
+    )
 
     def validate(self, field: str, value: Any) -> bool:
 
@@ -494,13 +727,18 @@ class FormatBot:
                 )
             )
 
-        if field in ("url", "local_resource_url"):
+        if field in ("url", "website", "local_resource_url"):
             return valid_https_url(str(value))
 
         if field == "services":
             return (
                 isinstance(value, list)
-                and all(isinstance(item, str) for item in value)
+                and bool(value)
+                and all(
+                    isinstance(item, str)
+                    and item in self.VALID_SERVICES
+                    for item in value
+                )
             )
 
         return False
@@ -512,14 +750,15 @@ class FormatBot:
 
 class CorroborationBot:
     """
-    Checks whether independent sources report the same value.
+    Counts agreement across independent source hosts.
 
-    Sources are counted by unique source_id, not by repeated
-    mentions on the same page.
+    Multiple pages on the same host count as one source.
+    The originating source is excluded.
     """
 
     def __init__(self, sources: list[dict]):
         self.sources = sources
+        self.service_bot = ServiceBot()
 
     def count_matches(
         self,
@@ -527,37 +766,72 @@ class CorroborationBot:
         field: str,
         value: Any,
         exclude_source: Optional[str] = None,
+        exclude_url: Optional[str] = None,
     ) -> int:
 
-        matching_sources = set()
+        matching_hosts = set()
 
         for source in self.sources:
 
             if source.get("state") != state:
                 continue
 
-            if source.get("source_id") == exclude_source:
+            source_id = source.get("source_id")
+
+            if (
+                exclude_source is not None
+                and str(source_id) == str(exclude_source)
+            ):
+                continue
+
+            source_url = source.get("url", "")
+
+            if (
+                exclude_url
+                and source_url
+                and normalize_host(source_url)
+                == normalize_host(exclude_url)
+            ):
+                continue
+
+            host = normalize_host(source_url)
+
+            if not host:
                 continue
 
             text = normalize_text(
                 source.get("source_text", "")
             ).lower()
 
+            matched = False
+
             if field == "phone":
+
                 candidate = normalize_phone(str(value))
 
-                if candidate and candidate in normalize_phone_text(text):
-                    matching_sources.add(source.get("source_id"))
+                matched = bool(
+                    candidate
+                    and candidate in normalize_phone_text(text)
+                )
 
             elif field == "email":
-                if normalize_email(str(value)) in text:
-                    matching_sources.add(source.get("source_id"))
+
+                matched = (
+                    normalize_email(str(value)) in text
+                )
 
             elif field == "services":
-                if str(value).lower() in text:
-                    matching_sources.add(source.get("source_id"))
 
-        return len(matching_sources)
+                detected = set(
+                    self.service_bot.extract(text)
+                )
+
+                matched = set(value).issubset(detected)
+
+            if matched:
+                matching_hosts.add(host)
+
+        return len(matching_hosts)
 
 
 def normalize_phone_text(text: str) -> str:
@@ -581,31 +855,49 @@ class ConsistencyBot:
         existing = current_record.get(field)
 
         if existing in (None, "", []):
+
             return {
                 "passed": True,
                 "reason": "Directory field is currently empty.",
             }
 
         if field == "phone":
+
             same = (
                 normalize_phone(str(existing))
                 == normalize_phone(str(candidate))
             )
+
         elif field == "email":
+
             same = (
                 normalize_email(str(existing))
                 == normalize_email(str(candidate))
             )
+
+        elif field == "website":
+
+            same = (
+                str(existing).rstrip("/")
+                == str(candidate).rstrip("/")
+            )
+
+        elif field == "services":
+
+            same = set(existing or []) == set(candidate or [])
+
         else:
             same = existing == candidate
 
         if same:
+
             return {
                 "passed": True,
                 "reason": "Candidate agrees with existing directory.",
             }
 
         if corroborated:
+
             return {
                 "passed": True,
                 "reason": "Changed value independently corroborated.",
@@ -626,10 +918,7 @@ class ConsistencyBot:
 
 class DecisionBot:
     """
-    Independent checks are combined into a confidence score.
-
-    The score is a deterministic engineering rule, not a statistical
-    probability that the information is correct.
+    Deterministic engineering score, not a statistical probability.
     """
 
     WEIGHTS = {
@@ -662,31 +951,69 @@ class DecisionBot:
             for name, passed in checks.items()
         )
 
+        automatic_update = (
+            score >= AUTO_APPLY_THRESHOLD
+            and all(checks.values())
+        )
+
         return {
             "confidence": round(score, 3),
             "checks": checks,
-            "automatic_update": (
-                score >= AUTO_APPLY_THRESHOLD
-                and source_authority
-                and format_valid
-                and contextual
-                and consistent
-            ),
+            "automatic_update": automatic_update,
         }
 
 
 # =========================================================
-# CANDIDATE COLLECTION
+# SOURCE AUTHORITY AND CANDIDATE COLLECTION
 # =========================================================
 
-def is_state_source(source: dict) -> bool:
-    return bool(
-        source.get("state")
-        and source.get("category") == "State Coalition"
+def is_state_source(
+    source: dict,
+    directory: dict,
+) -> bool:
+
+    category = normalize_text(
+        str(source.get("category", ""))
+    ).lower()
+
+    accepted_categories = {
+        "state coalition",
+        "state_coalition",
+        "state coalition resource",
+    }
+
+    if category not in accepted_categories:
+        return False
+
+    state = resolve_state(
+        source.get("state"),
+        directory,
+    )
+
+    if not state:
+        return False
+
+    record = directory.get(state, {})
+
+    official_website = record.get("website", "")
+
+    source_url = source.get("url", "")
+
+    if not official_website or not source_url:
+        return False
+
+    # The crawler source must belong to the official domain
+    # already recorded in the directory.
+    return same_official_host(
+        source_url,
+        official_website,
     )
 
 
-def collect_candidates(sources: list[dict]) -> list[dict]:
+def collect_candidates(
+    sources: list[dict],
+    directory: dict,
+) -> list[dict]:
 
     contact_bot = ContactBot()
     link_bot = LinkBot()
@@ -696,18 +1023,23 @@ def collect_candidates(sources: list[dict]) -> list[dict]:
 
     for source in sources:
 
-        if not is_state_source(source):
+        if not is_state_source(source, directory):
             continue
 
-        state = source.get("state")
+        state = resolve_state(
+            source.get("state"),
+            directory,
+        )
+
         text = source.get("source_text", "")
 
-        if not text:
+        if not state or not text:
             continue
 
         contacts = contact_bot.extract(text)
 
         for phone in contacts["phones"]:
+
             candidates.append({
                 "state": state,
                 "field": "phone",
@@ -722,6 +1054,7 @@ def collect_candidates(sources: list[dict]) -> list[dict]:
             })
 
         for email in contacts["emails"]:
+
             candidates.append({
                 "state": state,
                 "field": "email",
@@ -738,12 +1071,12 @@ def collect_candidates(sources: list[dict]) -> list[dict]:
         link = link_bot.extract(source)
 
         if link:
+
             candidates.append({
                 "state": state,
                 **link,
                 "display": link["value"],
                 "context": link["reason"],
-                "contextual": True,
                 "source_name": source.get("name"),
                 "source_url": source.get("url"),
             })
@@ -751,12 +1084,16 @@ def collect_candidates(sources: list[dict]) -> list[dict]:
         services = service_bot.extract(text)
 
         if services:
+
             candidates.append({
                 "state": state,
                 "field": "services",
                 "value": services,
                 "display": ", ".join(services),
-                "context": "Service terminology found on state coalition page.",
+                "context": (
+                    "Service terminology found on official "
+                    "state coalition page."
+                ),
                 "contextual": True,
                 "source_id": source.get("source_id"),
                 "source_name": source.get("name"),
@@ -794,25 +1131,41 @@ def validate_candidates(
         current_record = directory.get(state, {})
 
         if not isinstance(current_record, dict):
+
             exceptions.append({
                 **candidate,
-                "reason": "Invalid state directory record.",
+                "exception_reason": (
+                    "Invalid state directory record."
+                ),
             })
+
             continue
 
-        format_valid = format_bot.validate(field, value)
+        format_valid = format_bot.validate(
+            field,
+            value,
+        )
 
         corroboration_count = corroboration_bot.count_matches(
             state=state,
             field=field,
             value=value,
             exclude_source=candidate.get("source_id"),
+            exclude_url=candidate.get("source_url"),
         )
 
-        corroborated = (
-            corroboration_count >= 1
-            or field == "url"
-        )
+        # A same-host HTTPS redirect from the already verified
+        # official state coalition domain is sufficient for a
+        # website-path correction.
+        if field == "website":
+            corroborated = bool(
+                candidate.get("source_authority")
+                and candidate.get("contextual")
+            )
+        else:
+            corroborated = (
+                corroboration_count >= CORROBORATION_THRESHOLD
+            )
 
         consistency = consistency_bot.evaluate(
             current_record=current_record,
@@ -823,7 +1176,7 @@ def validate_candidates(
 
         score = decision_bot.score(
             source_authority=bool(
-                candidate.get("source_authority", True)
+                candidate.get("source_authority")
             ),
             format_valid=format_valid,
             contextual=bool(candidate.get("contextual")),
@@ -842,13 +1195,20 @@ def validate_candidates(
         }
 
         if score["automatic_update"]:
+
             accepted.append(result)
+
         else:
+
             result["exception_reason"] = (
                 consistency["reason"]
                 if not consistency["passed"]
-                else "Confidence or validation threshold not met."
+                else (
+                    "Confidence or validation threshold "
+                    "not met."
+                )
             )
+
             exceptions.append(result)
 
     return {
@@ -863,8 +1223,15 @@ def validate_candidates(
 
 class DirectoryUpdateEngine:
 
-    def __init__(self, storage_dir: Path = DATA_DIR):
+    def __init__(
+        self,
+        storage_dir: Path = DATA_DIR,
+    ):
+
         self.storage_dir = Path(storage_dir)
+
+        initialize_storage(self.storage_dir)
+
         self.source_bot = SourceBot(self.storage_dir)
 
     def load_existing_directory(
@@ -875,24 +1242,27 @@ class DirectoryUpdateEngine:
         if supplied_directory is not None:
             return copy.deepcopy(supplied_directory)
 
-        return read_json(
-            self.storage_dir / DIRECTORY_FILE.name,
-            {},
+        directory_path = resolve_directory_path(
+            self.storage_dir
         )
+
+        return read_json(directory_path, {})
 
     def apply_candidates(
         self,
         directory: dict,
         accepted: list[dict],
-    ) -> tuple[dict, list[dict]]:
+    ) -> tuple[dict, list[dict], list[dict]]:
 
         updated = copy.deepcopy(directory)
-        changes = []
 
-        # Group candidates by state and field.
+        changes = []
+        conflicts = []
+
         grouped = defaultdict(list)
 
         for candidate in accepted:
+
             grouped[
                 (
                     candidate["state"],
@@ -908,21 +1278,27 @@ class DirectoryUpdateEngine:
             if not isinstance(updated[state], dict):
                 continue
 
-            # Require agreement among all automatic candidates for
-            # the same field. A disagreement becomes an exception.
             values = {
                 json.dumps(
                     item["value"],
                     sort_keys=True,
+                    ensure_ascii=False,
                 )
                 for item in items
             }
 
             if len(values) != 1:
+
                 for item in items:
-                    item["exception_reason"] = (
-                        "Conflicting automated candidates."
-                    )
+
+                    conflicts.append({
+                        **item,
+                        "exception_reason": (
+                            "Conflicting automated candidates "
+                            "for the same state and field."
+                        ),
+                    })
+
                 continue
 
             candidate = max(
@@ -931,9 +1307,11 @@ class DirectoryUpdateEngine:
             )
 
             new_value = candidate["value"]
+
             old_value = updated[state].get(field)
 
             if field == "services":
+
                 old_services = updated[state].get(
                     "services",
                     [],
@@ -963,7 +1341,124 @@ class DirectoryUpdateEngine:
                 "updated_at": utc_now(),
             })
 
-        return updated, changes
+        return updated, changes, conflicts
+
+    def save_new_version(
+        self,
+        old_directory: dict,
+        new_directory: dict,
+        changes: list[dict],
+    ) -> dict:
+
+        directory_path = resolve_directory_path(
+            self.storage_dir
+        )
+
+        history_path = (
+            self.storage_dir / HISTORY_FILE.name
+        )
+
+        history = read_json(history_path, [])
+
+        if not isinstance(history, list):
+            history = []
+
+        valid_versions = [
+            item.get("version", 0)
+            for item in history
+            if isinstance(item, dict)
+            and isinstance(item.get("version"), int)
+        ]
+
+        next_version = (
+            max(valid_versions, default=0) + 1
+        )
+
+        history_entry = {
+            "version": next_version,
+            "created_at": utc_now(),
+            "previous_hash": stable_hash(old_directory),
+            "new_hash": stable_hash(new_directory),
+            "changes": changes,
+            "directory": new_directory,
+        }
+
+        updated_history = (
+            history + [history_entry]
+        )[-MAX_HISTORY:]
+
+        # Save history first. If directory writing fails,
+        # restore the previous history file.
+        if not write_json(history_path, updated_history):
+
+            return {
+                "success": False,
+                "message": "Could not save directory history.",
+            }
+
+        if not write_json(directory_path, new_directory):
+
+            write_json(history_path, history)
+
+            return {
+                "success": False,
+                "message": (
+                    "Could not save updated directory. "
+                    "Previous history was restored."
+                ),
+            }
+
+        return {
+            "success": True,
+            "version": next_version,
+            "directory_path": str(directory_path),
+        }
+
+    def save_exceptions(
+        self,
+        exceptions: list[dict],
+    ) -> bool:
+
+        path = (
+            self.storage_dir / EXCEPTION_FILE.name
+        )
+
+        existing = read_json(path, [])
+
+        if not isinstance(existing, list):
+            existing = []
+
+        existing_ids = {
+            item.get("candidate_id")
+            for item in existing
+            if isinstance(item, dict)
+        }
+
+        for item in exceptions:
+
+            candidate_id = stable_hash({
+                "state": item.get("state"),
+                "field": item.get("field"),
+                "value": item.get("value"),
+                "source": item.get("source_id"),
+                "reason": item.get("exception_reason"),
+            })[:24]
+
+            item = {
+                **item,
+                "candidate_id": candidate_id,
+                "recorded_at": utc_now(),
+            }
+
+            if candidate_id not in existing_ids:
+
+                existing.append(item)
+                existing_ids.add(candidate_id)
+
+        return write_json(
+            path,
+            existing[-MAX_EXCEPTIONS:],
+        )
 
     def run(
         self,
@@ -975,18 +1470,26 @@ class DirectoryUpdateEngine:
             current_directory
         )
 
-        if not directory:
+        if (
+            not isinstance(directory, dict)
+            or len(directory) != 50
+        ):
+
             return {
                 "success": False,
                 "message": (
-                    "No state directory supplied or saved. "
-                    "Pass STATE_COALITIONS from survivors-network.py."
+                    "A valid 50-state resource directory "
+                    "is required. Check the repository-root "
+                    "state_resource_directory.json file."
                 ),
             }
 
         sources = self.source_bot.load_sources()
 
-        candidates = collect_candidates(sources)
+        candidates = collect_candidates(
+            sources,
+            directory,
+        )
 
         validation = validate_candidates(
             candidates=candidates,
@@ -994,50 +1497,67 @@ class DirectoryUpdateEngine:
             directory=directory,
         )
 
-        updated_directory, changes = self.apply_candidates(
-            directory=directory,
-            accepted=validation["accepted"],
+        updated_directory, changes, conflicts = (
+            self.apply_candidates(
+                directory=directory,
+                accepted=validation["accepted"],
+            )
         )
 
-        # Any accepted candidate not actually applied due to a
-        # conflict in the grouped results becomes an exception.
+        validation["exceptions"].extend(conflicts)
+
+        # Identify accepted candidates that did not produce a
+        # change because the grouped update was unresolved.
         applied_keys = {
             (change["state"], change["field"])
             for change in changes
         }
 
+        conflict_keys = {
+            (
+                item.get("state"),
+                item.get("field"),
+            )
+            for item in conflicts
+        }
+
         for candidate in validation["accepted"]:
+
             key = (
                 candidate["state"],
                 candidate["field"],
             )
 
-            if key not in applied_keys:
-                if candidate.get("field") == "services":
-                    existing = directory.get(
-                        candidate["state"], {}
-                    ).get("services", [])
+            if key in applied_keys or key in conflict_keys:
+                continue
 
-                    if isinstance(existing, str):
-                        existing = [existing]
+            current_value = directory.get(
+                candidate["state"],
+                {},
+            ).get(candidate["field"])
 
-                    if set(existing or []).issuperset(
-                        candidate["value"]
-                    ):
-                        continue
+            if candidate["field"] == "services":
 
-                if directory.get(
-                    candidate["state"], {}
-                ).get(candidate["field"]) == candidate["value"]:
+                existing = current_value or []
+
+                if isinstance(existing, str):
+                    existing = [existing]
+
+                if set(existing).issuperset(
+                    candidate["value"]
+                ):
                     continue
 
-                validation["exceptions"].append({
-                    **candidate,
-                    "exception_reason": (
-                        "Candidate was not applied because "
-                        "the update group could not be resolved."
-                    ),
-                })
+            elif current_value == candidate["value"]:
+                continue
+
+            validation["exceptions"].append({
+                **candidate,
+                "exception_reason": (
+                    "Candidate was not applied because "
+                    "the update could not be resolved."
+                ),
+            })
 
         report = {
             "run_at": utc_now(),
@@ -1054,90 +1574,74 @@ class DirectoryUpdateEngine:
             "changes": changes,
         }
 
+        version_result = None
+
         if auto_apply and changes:
 
-            directory_path = (
-                self.storage_dir / DIRECTORY_FILE.name
+            version_result = self.save_new_version(
+                old_directory=directory,
+                new_directory=updated_directory,
+                changes=changes,
             )
 
-            history_path = (
-                self.storage_dir / HISTORY_FILE.name
-            )
+            if not version_result["success"]:
 
-            history = read_json(history_path, [])
-
-            history.append({
-                "version": len(history) + 1,
-                "created_at": utc_now(),
-                "previous_hash": stable_hash(directory),
-                "new_hash": stable_hash(updated_directory),
-                "changes": changes,
-                "directory": updated_directory,
-            })
-
-            history = history[-MAX_HISTORY:]
-
-            if not write_json(history_path, history):
                 return {
                     "success": False,
-                    "message": (
-                        "Could not save directory history. "
-                        "No new directory version was written."
-                    ),
+                    "message": version_result["message"],
                     "report": report,
                 }
 
-            if not write_json(directory_path, updated_directory):
-                return {
-                    "success": False,
-                    "message": "Could not save updated directory.",
-                    "report": report,
-                }
+            report["directory_version"] = (
+                version_result["version"]
+            )
 
-        # Store unresolved exceptions separately.
-        exception_path = (
-            self.storage_dir / EXCEPTION_FILE.name
+        if not self.save_exceptions(
+            validation["exceptions"]
+        ):
+
+            logger.error("Could not save directory exceptions.")
+
+        report_path = (
+            self.storage_dir / REPORT_FILE.name
         )
 
-        existing_exceptions = read_json(
-            exception_path,
-            [],
+        if not write_json(report_path, report):
+
+            logger.error("Could not save directory bot report.")
+
+        record_activity(
+            event="directory_maintenance_completed",
+            details={
+                "sources_loaded": len(sources),
+                "candidates_found": len(candidates),
+                "updates_applied": (
+                    len(changes) if auto_apply else 0
+                ),
+                "exceptions_created": len(
+                    validation["exceptions"]
+                ),
+                "auto_apply_enabled": auto_apply,
+            },
+            storage_dir=self.storage_dir,
         )
-
-        existing_ids = {
-            item.get("candidate_id")
-            for item in existing_exceptions
-        }
-
-        for item in validation["exceptions"]:
-
-            item["candidate_id"] = stable_hash({
-                "state": item.get("state"),
-                "field": item.get("field"),
-                "value": item.get("value"),
-                "source": item.get("source_id"),
-            })[:20]
-
-            if item["candidate_id"] not in existing_ids:
-                existing_exceptions.append(item)
-
-        write_json(
-            exception_path,
-            existing_exceptions[-MAX_EXCEPTIONS:],
-        )
-
-        write_json(REPORT_FILE, report)
 
         return {
             "success": True,
             "message": (
                 "Automated directory maintenance completed."
                 if auto_apply
-                else "Directory analysis completed without applying changes."
+                else (
+                    "Directory analysis completed without "
+                    "applying changes."
+                )
             ),
             "report": report,
-            "updated_directory": updated_directory,
-            "changes": changes,
+            "updated_directory": (
+                updated_directory if auto_apply else directory
+            ),
+            "changes": changes if auto_apply else [],
+            "proposed_changes": changes,
             "exceptions": validation["exceptions"],
         }
 
@@ -1148,11 +1652,13 @@ class DirectoryUpdateEngine:
 
 def run_automated_updates(
     current_directory: Optional[dict] = None,
-    storage_dir: str = "resource_crawler_data",
+    storage_dir: str = str(DATA_DIR),
     auto_apply: bool = True,
 ) -> dict:
 
-    engine = DirectoryUpdateEngine(Path(storage_dir))
+    engine = DirectoryUpdateEngine(
+        Path(storage_dir)
+    )
 
     return engine.run(
         current_directory=current_directory,
@@ -1161,7 +1667,7 @@ def run_automated_updates(
 
 
 def get_directory_update_status(
-    storage_dir: str = "resource_crawler_data",
+    storage_dir: str = str(DATA_DIR),
 ) -> dict:
 
     directory = Path(storage_dir)
@@ -1188,11 +1694,14 @@ def get_directory_update_status(
         "updates_applied": report.get("updates_applied", 0),
         "exception_count": len(exceptions),
         "directory_versions": len(history),
+        "directory_file": str(
+            resolve_directory_path(directory)
+        ),
     }
 
 
 def get_directory_exceptions(
-    storage_dir: str = "resource_crawler_data",
+    storage_dir: str = str(DATA_DIR),
 ) -> list:
 
     return read_json(
@@ -1202,7 +1711,7 @@ def get_directory_exceptions(
 
 
 def get_directory_history(
-    storage_dir: str = "resource_crawler_data",
+    storage_dir: str = str(DATA_DIR),
 ) -> list:
 
     return read_json(
@@ -1212,40 +1721,46 @@ def get_directory_history(
 
 
 def export_current_directory(
-    storage_dir: str = "resource_crawler_data",
+    storage_dir: str = str(DATA_DIR),
 ) -> dict:
 
-    return read_json(
-        Path(storage_dir) / DIRECTORY_FILE.name,
-        {},
+    path = resolve_directory_path(
+        Path(storage_dir)
     )
+
+    return read_json(path, {})
 
 
 def rollback_directory(
     version: int,
-    storage_dir: str = "resource_crawler_data",
+    storage_dir: str = str(DATA_DIR),
 ) -> dict:
     """
     Restore a previously saved directory version.
 
-    Version numbers start at 1.
+    Version numbers are monotonically increasing.
     """
 
-    directory = Path(storage_dir)
+    storage_dir = Path(storage_dir)
+
+    initialize_storage(storage_dir)
+
     history = read_json(
-        directory / HISTORY_FILE.name,
+        storage_dir / HISTORY_FILE.name,
         [],
     )
 
     selected = next(
         (
             item for item in history
-            if item.get("version") == version
+            if isinstance(item, dict)
+            and item.get("version") == version
         ),
         None,
     )
 
     if not selected:
+
         return {
             "success": False,
             "message": "Requested directory version not found.",
@@ -1253,20 +1768,38 @@ def rollback_directory(
 
     restored = selected.get("directory")
 
-    if not isinstance(restored, dict):
+    if (
+        not isinstance(restored, dict)
+        or len(restored) != 50
+    ):
+
         return {
             "success": False,
             "message": "Stored directory version is invalid.",
         }
 
-    if not write_json(
-        directory / DIRECTORY_FILE.name,
-        restored,
-    ):
+    directory_path = resolve_directory_path(
+        storage_dir
+    )
+
+    current = read_json(directory_path, {})
+
+    if not write_json(directory_path, restored):
+
         return {
             "success": False,
             "message": "Could not restore directory version.",
         }
+
+    record_activity(
+        event="directory_rollback",
+        details={
+            "restored_version": version,
+            "previous_hash": stable_hash(current),
+            "restored_hash": stable_hash(restored),
+        },
+        storage_dir=storage_dir,
+    )
 
     return {
         "success": True,
@@ -1284,6 +1817,7 @@ def self_test() -> dict:
     tests = {}
 
     try:
+
         contact_bot = ContactBot()
 
         sample = (
@@ -1341,7 +1875,7 @@ def self_test() -> dict:
 
         source = {
             "source_id": "test",
-            "state": "WV",
+            "state": "West Virginia",
             "category": "State Coalition",
             "name": "Test Coalition",
             "url": "https://example.org",
@@ -1353,6 +1887,7 @@ def self_test() -> dict:
 
         tests["same_host_redirect"] = (
             link is not None
+            and link["field"] == "website"
             and link["value"].endswith("/resources")
         )
 
@@ -1365,7 +1900,79 @@ def self_test() -> dict:
             LinkBot().extract(bad_source) is None
         )
 
+        test_directory = {
+            "West Virginia": {
+                "code": "WV",
+                "name": "Test Coalition",
+                "website": "https://example.org",
+            }
+        }
+
+        tests["state_code_resolution"] = (
+            resolve_state("WV", test_directory)
+            == "West Virginia"
+        )
+
+        tests["website_field_consistency"] = (
+            ConsistencyBot().evaluate(
+                current_record={
+                    "website": "https://example.org"
+                },
+                field="website",
+                candidate="https://example.org",
+                corroborated=True,
+            )["passed"]
+        )
+
+        # Service corroboration must compare service categories,
+        # not the string representation of a Python list.
+        corroboration_sources = [
+            {
+                "source_id": "source-a",
+                "state": "West Virginia",
+                "url": "https://one.example.org",
+                "source_text": (
+                    "We provide emergency shelter "
+                    "and legal assistance."
+                ),
+            },
+            {
+                "source_id": "source-b",
+                "state": "West Virginia",
+                "url": "https://two.example.org",
+                "source_text": (
+                    "We provide emergency shelter "
+                    "and legal assistance."
+                ),
+            },
+        ]
+
+        corroboration = CorroborationBot(
+            corroboration_sources
+        )
+
+        tests["service_corroboration"] = (
+            corroboration.count_matches(
+                state="West Virginia",
+                field="services",
+                value=["legal_assistance", "shelter"],
+                exclude_source="source-a",
+                exclude_url="https://one.example.org",
+            ) == 1
+        )
+
+        tests["independent_host_counting"] = (
+            corroboration.count_matches(
+                state="West Virginia",
+                field="services",
+                value=["legal_assistance", "shelter"],
+                exclude_source="source-a",
+                exclude_url="https://one.example.org",
+            ) == 1
+        )
+
     except Exception as error:
+
         logger.exception("Self-test failed")
         tests["unexpected_error"] = str(error)
 
@@ -1379,4 +1986,8 @@ def self_test() -> dict:
 
 
 if __name__ == "__main__":
-    print(json.dumps(self_test(), indent=2))
+
+    print(json.dumps(
+        self_test(),
+        indent=4,
+    ))
