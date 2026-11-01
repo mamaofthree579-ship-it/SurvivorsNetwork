@@ -432,21 +432,58 @@ def load_pending_reviews() -> List[Dict[str, Any]]:
 
 
 def load_snapshots() -> List[Dict[str, Any]]:
-    records = []
+    """Load crawler snapshots in both supported on-disk layouts.
 
-    if not SNAPSHOT_DIR.exists():
-        return records
+    resource_crawler.py currently writes one mapping file:
+        resource_crawler_data/snapshots.json
 
-    for path in SNAPSHOT_DIR.glob("*.json"):
+    Older/alternate deployments may use one JSON file per snapshot:
+        resource_crawler_data/snapshots/*.json
+
+    The mapping file is authoritative when both layouts contain the
+    same source ID; duplicate records are resolved by newest fetched_at.
+    """
+    records_by_source = {}
+    ordered_records = []
+
+    snapshot_files = []
+    combined_file = DATA_DIR / "snapshots.json"
+    if combined_file.is_file():
+        snapshot_files.append(combined_file)
+
+    if SNAPSHOT_DIR.exists():
+        snapshot_files.extend(sorted(SNAPSHOT_DIR.glob("*.json")))
+
+    for path in snapshot_files:
         if file_is_private(path):
             continue
 
-        for item in unwrap_records(read_json(path, default={})):
+        try:
+            data = read_json(path, default={})
+        except Exception as exc:
+            LOGGER.warning("Skipping unreadable snapshot file %s: %s", path.name, exc)
+            continue
+
+        for item in unwrap_records(data):
             item = copy.deepcopy(item)
             item.setdefault("_snapshot_file", path.name)
-            records.append(item)
+            source_id = record_source_id(item)
+            if not source_id:
+                ordered_records.append(item)
+                continue
 
-    return records
+            previous = records_by_source.get(source_id)
+            current_time = normalize_text(
+                get_first(item, ("fetched_at", "checked_at", "timestamp"))
+            )
+            previous_time = normalize_text(
+                get_first(previous or {}, ("fetched_at", "checked_at", "timestamp"))
+            )
+            if previous is None or current_time >= previous_time:
+                records_by_source[source_id] = item
+
+    ordered_records.extend(records_by_source.values())
+    return ordered_records
 
 
 def load_crawler_inputs():

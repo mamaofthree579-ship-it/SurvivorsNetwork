@@ -38,7 +38,7 @@ ROOT = Path(__file__).resolve().parent
 
 DATA_DIR = ROOT / "resource_crawler_data"
 
-DIRECTORY_FILE = DATA_DIR / "state_resource_directory.json"
+DIRECTORY_FILE = ROOT / "state_resource_directory.json"
 
 STATE_MODULE_FILE = ROOT / "resource_directory.py"
 
@@ -308,8 +308,16 @@ def build_crawler_state_data(
 
         code = record["code"]
 
+        coalition_name = (
+            record.get("coalition")
+            or record.get("coalition_name")
+            or record.get("name")
+            or record["state"]
+        )
         crawler_states[code] = {
-            "name": record["state"],
+            "name": coalition_name,
+            "coalition": coalition_name,
+            "state_name": record["state"],
             "abbr": code,
             "url": record.get("website", ""),
         }
@@ -387,9 +395,7 @@ def run_resource_maintenance():
         "Loading the existing 50-state resource directory..."
     )
 
-    state_records, current_directory = (
-        load_state_directory()
-    )
+    state_records, _ = load_state_directory()
 
     print(
         f"Loaded {len(state_records)} state records."
@@ -452,9 +458,11 @@ def run_resource_maintenance():
         "Passing collected public-source data to the eight bots..."
     )
 
+    # Let the updater load and persist the canonical repository-root
+    # directory. Passing an in-memory copy would intentionally prevent
+    # persistence and make scheduled updates disappear after the job.
     update_result = updater.run_automated_updates(
-        current_directory=current_directory,
-        storage_dir=str(DATA_DIR),
+        current_directory=None,
         auto_apply=True,
     )
 

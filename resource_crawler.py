@@ -743,16 +743,17 @@ class RobotsPolicyCache:
 
         cached = self.cache.get(origin)
 
-        if cached:
+        if cached and time.monotonic() < cached["expires_at"]:
+            parser = cached["parser"]
+            if parser is None:
+                return cached["allowed"], cached["message"]
 
-            expires_at = cached["expires_at"]
-
-            if time.monotonic() < expires_at:
-
-                return (
-                    cached["allowed"],
-                    cached["message"],
-                )
+            allowed = parser.can_fetch(USER_AGENT, url)
+            return (
+                allowed,
+                "robots.txt permits access."
+                if allowed else "robots.txt disallows access.",
+            )
 
         parsed = urlparse(url)
 
@@ -781,6 +782,8 @@ class RobotsPolicyCache:
                 stream=True,
                 allow_redirects=False,
             )
+
+            parser = None
 
             if response.status_code in (404, 410):
 
@@ -846,12 +849,12 @@ class RobotsPolicyCache:
                     )
 
             self.cache[origin] = {
+                # Cache the parsed policy, not the first URL's boolean
+                # decision. robots.txt rules are path-specific.
+                "parser": parser,
                 "allowed": result[0],
                 "message": result[1],
-                "expires_at": (
-                    time.monotonic()
-                    + ROBOTS_CACHE_SECONDS
-                ),
+                "expires_at": time.monotonic() + ROBOTS_CACHE_SECONDS,
             }
 
             return result
@@ -1625,12 +1628,16 @@ def run_crawl(
     # Save review records first. This ensures a detected change
     # is not lost if the snapshot file cannot subsequently save.
 
-    reviews_saved = storage.save_reviews(
-        reviews
-    )
+    reviews_saved = storage.save_reviews(reviews)
 
-    snapshots_saved = storage.save_snapshots(
-        snapshots
+    # Never advance the baseline snapshot if the review queue could
+    # not be persisted. Otherwise a detected change could disappear:
+    # the next crawl would compare against the new snapshot and no
+    # longer rediscover the change.
+    snapshots_saved = (
+        storage.save_snapshots(snapshots)
+        if reviews_saved
+        else False
     )
 
     pending_count = sum(
@@ -1959,7 +1966,7 @@ def self_test() -> dict:
         test_results["website_field_compatibility"] = (
             len(registry) == 1
             and registry[0]["url"]
-            == "https://example.org"
+            == "https://example.org/"
             and registry[0]["state_code"] == "WV"
         )
 
@@ -1979,7 +1986,7 @@ def self_test() -> dict:
         test_results["legacy_url_compatibility"] = (
             len(legacy_registry) == 1
             and legacy_registry[0]["url"]
-            == "https://example.org"
+            == "https://example.org/"
         )
 
         storage = CrawlerStorage(test_dir)
