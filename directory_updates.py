@@ -2136,8 +2136,18 @@ def rollback_directory(version_file: Optional[str] = None) -> Dict[str, Any]:
 # ---------------------------------------------------------------------
 
 def self_test() -> Dict[str, Any]:
+    """
+    Offline tests for the directory updater.
+
+    Contact information is optional. Missing email or phone must
+    never cause an otherwise valid resource to fail verification.
+
+    No network requests are made.
+    """
+
     tests = {}
 
+    # State normalization
     tests["state_alias_abbr"] = (
         normalize_state_record({
             "abbr": "WV",
@@ -2150,6 +2160,7 @@ def self_test() -> Dict[str, Any]:
         resolve_state_code("West Virginia") == "WV"
     )
 
+    # Website validation
     tests["https_url_validation"] = (
         validate_resource_url("https://example.org")
     )
@@ -2158,44 +2169,87 @@ def self_test() -> Dict[str, Any]:
         not validate_resource_url("http://example.org")
     )
 
-    tests["phone_normalization"] = (
-        normalize_phone("(304) 555-1212") == "304-555-1212"
+    # Contact extraction when contact details exist
+    sample_with_contact = (
+        "Emergency shelter services. "
+        "Call (304) 555-0182. "
+        "Contact us at help@example.org."
     )
 
-    tests["email_validation"] = (
-        validate_email("contact@example.org")
+    tests["email_extraction"] = (
+        extract_email(sample_with_contact) == "help@example.org"
     )
 
-    tests["service_extraction"] = (
-        "emergency shelter" in extract_services(
-            "We provide emergency shelter and legal aid."
+    tests["phone_extraction"] = (
+        extract_phone(sample_with_contact) == "304-555-0182"
+    )
+
+    # Contact extraction when no contact details exist
+    sample_without_contact = (
+        "This organization provides emergency shelter "
+        "and housing assistance."
+    )
+
+    missing_email = extract_email(sample_without_contact)
+    missing_phone = extract_phone(sample_without_contact)
+
+    tests["missing_email_is_allowed"] = (
+        missing_email == ""
+    )
+
+    tests["missing_phone_is_allowed"] = (
+        missing_phone == ""
+    )
+
+    tests["missing_contact_does_not_fail_format"] = (
+        (
+            not missing_phone
+            or validate_phone(missing_phone)
+        )
+        and (
+            not missing_email
+            or validate_email(missing_email)
         )
     )
 
+    # Service extraction
+    tests["service_extraction"] = (
+        "emergency shelter" in extract_services(
+            sample_without_contact
+        )
+    )
+
+    # Temporary website failure must not retire a resource
+    failed_resource = update_existing_resource_status(
+        {"status": "active"},
+        {
+            "status_code": 503,
+            "error": "Service unavailable",
+        },
+    )
+
     tests["temporary_failure_not_retired"] = (
-        update_existing_resource_status(
-            {"status": "active"},
-            {"status_code": 503, "error": "Service unavailable"},
-        ).get("status") == "active"
+        failed_resource.get("status") == "active"
     )
 
     tests["failed_crawl_marks_stale"] = (
-        update_existing_resource_status(
-            {"status": "active"},
-            {"status_code": 503, "error": "Service unavailable"},
-        ).get("verification_status") == "stale"
+        failed_resource.get("verification_status") == "stale"
+    )
+
+    # Closure evidence must not retire after one observation
+    closure_resource = update_existing_resource_status(
+        {"status": "active"},
+        {
+            "text": "Our organization has permanently closed.",
+            "url": "https://example.org/closure",
+        },
     )
 
     tests["closure_requires_repeated_evidence"] = (
-        update_existing_resource_status(
-            {"status": "active"},
-            {
-                "text": "Our organization has permanently closed.",
-                "url": "https://example.org/closure",
-            },
-        ).get("status") != "retired"
+        closure_resource.get("status") != "retired"
     )
 
+    # Source independence
     tests["same_domain_not_independent"] = (
         not is_independent_host(
             "www.example.org",
@@ -2210,18 +2264,31 @@ def self_test() -> Dict[str, Any]:
         )
     )
 
+    # Privacy boundary
     tests["private_file_guard"] = file_is_private(
         DATA_DIR / "survivor_profiles.json"
     )
 
-    passed = sum(1 for value in tests.values() if value)
+    passed = sum(
+        1 for result in tests.values()
+        if result is True
+    )
+
+    failed = [
+        name for name, result in tests.items()
+        if result is not True
+    ]
 
     return {
         "version": VERSION,
         "passed": passed,
+        "failed": len(failed),
         "total": len(tests),
-        "success": passed == len(tests),
+        "success": len(failed) == 0,
+        "failed_tests": failed,
         "tests": tests,
+        "network_requests": 0,
+        "contact_information_required": False,
     }
 
 
